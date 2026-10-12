@@ -91,16 +91,22 @@ function anthropicTraits(model: string, caps?: AiModelCaps): AnthropicTraits {
       explicitOff: caps.adaptiveThinking && !caps.budgetThinking
     }
   }
-  const isHaiku = /haiku/i.test(model)
+  // Haiku 5.5 (platform.claude.com/docs/en/models/haiku-5-5/overview,
+  // verified 2026-10-12) left the old no-effort/budget_tokens Haiku shape
+  // behind: adaptive thinking + the effort parameter like the rest of the 5.x
+  // lineup, manual budget_tokens now a 400, and «Av» is an explicit
+  // {type:'disabled'} (not impossible like Fable/Opus 5.5, not between_tools
+  // like Sonnet 5.5). Haiku 4.5 and earlier keep the old shape.
+  const isLegacyHaiku = /haiku/i.test(model) && !/haiku-[5-9]/i.test(model)
   return {
-    effort: isHaiku ? [] : ['low', 'medium', 'high'],
-    adaptive: !isHaiku,
+    effort: isLegacyHaiku ? [] : ['low', 'medium', 'high'],
+    adaptive: !isLegacyHaiku,
     alwaysThinks,
     betweenToolsOff,
     // Opus 5 thinks by default too ("thinking is on by default and
     // {type:'disabled'} is accepted", platform.claude.com, 2026-09-26);
     // Opus 5.5 never reaches this — alwaysThinks wins in anthropicThinking
-    explicitOff: /sonnet-[5-9]|opus-[5-9]/i.test(model)
+    explicitOff: /sonnet-[5-9]|opus-[5-9]|haiku-[5-9]/i.test(model)
   }
 }
 
@@ -210,7 +216,10 @@ function webSearchHint(req: AiChatRequest): string {
 
 /** Anthropic web-search tool for a model. The dynamic-filtering variant
  *  (_20260209) needs a Claude 4.6+ model (Opus 4.6+/Sonnet 4.6+/Sonnet 5/
- *  Opus 5+/Fable); Haiku and older models only accept the basic variant. */
+ *  Opus 5+/Fable); Haiku and older models only accept the basic variant.
+ *  Unverified for Haiku 5.5 (platform.claude.com names no per-model support
+ *  table for this tool, 2026-10-12) — left on the basic variant rather than
+ *  guessing; open question in docs/agent-notes/modeller-api.md. */
 function anthropicWebSearchTool(model: string): Record<string, unknown> {
   const modern = /fable|mythos|opus-4-[6-9]|opus-[5-9]|sonnet-4-[6-9]|sonnet-[5-9]/i.test(model)
   return {
@@ -461,14 +470,18 @@ async function chatAnthropic(
   })
 
   const tuning = anthropicThinking(model, thinking, caps)
-  // The models that ship safety classifiers (a decline is HTTP 200 +
-  // stop_reason 'refusal'): Fable 5/5.1, Opus 5/5.5 and Sonnet 5.5 (not
-  // Sonnet 5), per Anthropic's refusals-and-fallback page (Opus verified
-  // 2026-09-27; Sonnet 5.5 ships five stop_details categories — cyber, bio,
-  // frontier_llm, reasoning_extraction, general_harms — and fallback retries
+  // The models whose classifier declines get a server-side fallback retry (a
+  // decline is HTTP 200 + stop_reason 'refusal' either way): Fable 5/5.1,
+  // Opus 5/5.5 and Sonnet 5.5 (not Sonnet 5), per Anthropic's
+  // refusals-and-fallback page (Opus verified 2026-09-27; Sonnet 5.5 ships
+  // five stop_details categories — cyber, bio, frontier_llm,
+  // reasoning_extraction, general_harms — and fallback retries
   // cyber/frontier_llm declines onto Sonnet 5, platform.claude.com/docs/en/
   // models/sonnet-5-5/whats-new-sonnet-5-5, verified 2026-10-05). Mythos is
-  // Fable's twin.
+  // Fable's twin. Haiku 5.5 ALSO ships classifiers now (whats-new-haiku-5-5,
+  // verified 2026-10-12) but is deliberately left out here: its own docs say
+  // "Server-side fallback isn't available" for it, so a decline there still
+  // ends in the plain refusal below — nothing to retry.
   const hasClassifiers = /fable|mythos|opus-5|sonnet-5-5/i.test(model)
   const params: Record<string, unknown> = {
     model,
