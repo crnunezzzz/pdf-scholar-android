@@ -108,8 +108,11 @@ try {
       el.dispatchEvent(new Event('input', { bubbles: true }))
     }
     // The compat group is the field-group holding the base-URL input
+    // By the Ollama row in its service menu: the URL field's placeholder is an
+    // example endpoint and changed once already (v0.61.0 — this locator went
+    // red with it, unnoticed until 2026-10-13)
     const compatGroup = () => [...document.querySelectorAll('.ai-field-group')]
-      .find((g) => g.querySelector('input[placeholder="http://localhost:11434/v1"]'))
+      .find((g) => g.querySelector('select option[value="http://localhost:11434/v1"]'))
   `
 
   // Keyless factory profile: opening the assistant lands in the settings
