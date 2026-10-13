@@ -385,10 +385,12 @@ export function textExtent(
 /** The scale the window reads the page at: the column fits the window's
  *  width with a little air on each side, never below 100 % (a fitted page on
  *  a small screen) and never above 160 % (a glimpse, not a loupe). In 5 %
- *  steps, so the render cache is hit again by the next link on the page. */
+ *  steps, so the render cache is hit again by the next link on the page —
+ *  rounded DOWN: rounded to the nearest step, an entry came out a few pixels
+ *  wider than the window and lost the end of its first line (Emil, 2026-10-13). */
 export function previewScale(columnW: number, boxW: number, min = 1, max = 1.6): number {
   if (!(columnW > 0)) return min
-  return Math.round(clamp((boxW - 24) / columnW, min, max) * 20) / 20
+  return Math.max(min, Math.floor(clamp((boxW - 24) / columnW, min, max) * 20) / 20)
 }
 
 /** «5–9», «[5-9]», «5–9]»: the span of works a citation's own text names

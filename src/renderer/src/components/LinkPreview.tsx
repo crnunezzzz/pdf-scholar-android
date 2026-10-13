@@ -293,7 +293,9 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       const [l, t] = img.viewport.convertToViewportPoint(entryRect.x0, entryRect.top)
       const [r, b] = img.viewport.convertToViewportPoint(entryRect.x1, entryRect.bottom)
       const need = Math.ceil(b - t) + 12
-      box.w = Math.min(box.w, Math.ceil(r - l) + 24)
+      // As wide as the entry needs, within the screen: the 600 px default is
+      // a ceiling for page windows, not for a line that must come out whole
+      box.w = Math.min(window.innerWidth - 24, Math.ceil(r - l) + 24)
       box.h = Math.max(40, Math.min(need, maxH))
       scroll = { left: Math.max(0, Math.floor(l) - 12), top: Math.max(0, Math.floor(t) - 6) }
       entry = true
