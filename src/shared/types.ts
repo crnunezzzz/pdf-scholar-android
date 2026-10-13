@@ -209,6 +209,13 @@ export interface DocBookmark {
    *  the page number instead. */
   label: string
   createdAt: number
+  /** Nested under the bookmark on this page (issue #43); absent = top level.
+   *  The parent's page is its identity — a page holds at most one bookmark.
+   *  The list stays flat and page-ordered; `src/shared/bookmarks.ts` derives
+   *  the tree. */
+  parent?: number
+  /** Its children hidden in the panel */
+  collapsed?: boolean
 }
 
 export interface FilePayload {

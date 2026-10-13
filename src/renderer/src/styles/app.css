@@ -4268,6 +4268,7 @@ html.pen-near .draw-layer {
 }
 
 .bookmark-edit,
+.bookmark-nest,
 .bookmark-delete {
   flex-shrink: 0;
   width: 22px;
@@ -4279,8 +4280,44 @@ html.pen-near .draw-layer {
 }
 
 .bookmark-row:hover .bookmark-edit,
+.bookmark-row:hover .bookmark-nest:not(:disabled),
 .bookmark-row:hover .bookmark-delete {
   opacity: 1;
+}
+
+/* Nesting (issue #43): the two arrows sit with the pencil, and a move that
+   would do nothing (the first sibling, a top-level row) does not show */
+.bookmark-nest:disabled {
+  pointer-events: none;
+}
+
+.bookmark-nest:hover {
+  background: var(--active);
+  color: var(--text);
+}
+
+/* The fold column exists only once something is nested, so a flat list is
+   drawn exactly as before */
+.bookmark-fold {
+  flex-shrink: 0;
+  width: 16px;
+  height: 22px;
+  margin-left: 2px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 22px;
+  text-align: center;
+  transition: transform 0.12s ease;
+}
+
+.bookmark-fold.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+button.bookmark-fold:hover {
+  background: var(--active);
+  color: var(--text);
 }
 
 .bookmark-edit:hover {

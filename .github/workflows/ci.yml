@@ -65,6 +65,9 @@ jobs:
       # The search query rule: a phrase the page breaks across a line is one
       # match (every whitespace run in the query matches any on the page)
       - run: npm run test:search
+      # Nested bookmarks (issue #43): the tree from a flat page-ordered list,
+      # nest/out/remove/fold, a stored list read as untrusted input
+      - run: npm run test:bookmarks
       # BM25 excerpt fallback for documents beyond the model's context window:
       # budget bounds, real-page markers, char→quote citation conversion
       - run: npm run test:retrieval

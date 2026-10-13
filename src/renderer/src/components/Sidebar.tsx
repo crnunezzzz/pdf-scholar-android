@@ -10,6 +10,7 @@ import {
 } from '../annotations'
 import type { PageAnnotation } from '../annotations'
 import type { DocBookmark } from '../../../shared/types'
+import { bookmarkRows, indentBookmark } from '../../../shared/bookmarks'
 import type { DocAttachment } from '../attachments'
 import { attachmentExtension, canOpenAttachment, isPdfAttachment } from '../../../shared/attachments'
 import { t, useLang } from '../i18n'
@@ -109,6 +110,10 @@ interface Props {
   /** Bookmark the page, or remove the bookmark it already has */
   onToggleBookmark(page: number): void
   onRenameBookmark(page: number, label: string): void
+  /** Nesting (issue #43): under the bookmark above, out one level, fold */
+  onIndentBookmark(page: number): void
+  onOutdentBookmark(page: number): void
+  onToggleBookmarkCollapsed(page: number): void
   onExport(format: ExportFormat): void
   /** Open the AI panel with the "summarize my annotations" question */
   onAskAi(): void
@@ -172,6 +177,9 @@ function Sidebar({
   bookmarks,
   onToggleBookmark,
   onRenameBookmark,
+  onIndentBookmark,
+  onOutdentBookmark,
+  onToggleBookmarkCollapsed,
   onExport,
   onAskAi,
   docName,
@@ -439,6 +447,9 @@ function Sidebar({
           onJumpToPage={onJumpToPage}
           onToggle={onToggleBookmark}
           onRename={onRenameBookmark}
+          onIndent={onIndentBookmark}
+          onOutdent={onOutdentBookmark}
+          onToggleCollapsed={onToggleBookmarkCollapsed}
         />
       )}
 
@@ -502,14 +513,26 @@ function BookmarkList({
   currentPage,
   onJumpToPage,
   onToggle,
-  onRename
+  onRename,
+  onIndent,
+  onOutdent,
+  onToggleCollapsed
 }: {
   bookmarks: readonly DocBookmark[]
   currentPage: number
   onJumpToPage(page: number): void
   onToggle(page: number): void
   onRename(page: number, label: string): void
+  onIndent(page: number): void
+  onOutdent(page: number): void
+  onToggleCollapsed(page: number): void
 }): React.JSX.Element {
+  // Nesting (issue #43) costs the flat list nothing: the fold column appears
+  // only once something is nested, and the two nesting buttons sit with the
+  // pencil and the cross, shown on hover. No drag — buttons work the same by
+  // touch, and a list of pages is not worth a drag-and-drop of its own.
+  const rows = bookmarkRows(bookmarks)
+  const nested = rows.some((r) => r.depth > 0 || r.hasChildren)
   /** Page whose label is being edited, or null. The draft lives here rather than
    *  in the row so committing does not depend on the row surviving a re-sort. */
   const [editing, setEditing] = useState<{ page: number; draft: string } | null>(null)
@@ -535,8 +558,12 @@ function BookmarkList({
 
       {bookmarks.length === 0 && <p className="sidebar-empty">{t('side.noBookmarks')}</p>}
 
-      {bookmarks.map((b) => (
-        <div key={b.page} className={`bookmark-row${b.page === currentPage ? ' current' : ''}`}>
+      {rows.map(({ bookmark: b, depth, hasChildren }) => (
+        <div
+          key={b.page}
+          className={`bookmark-row${b.page === currentPage ? ' current' : ''}`}
+          style={depth > 0 ? { paddingLeft: depth * 16 } : undefined}
+        >
           {editing?.page === b.page ? (
             <input
               className="bookmark-rename"
@@ -553,6 +580,19 @@ function BookmarkList({
             />
           ) : (
             <>
+              {nested &&
+                (hasChildren ? (
+                  <button
+                    className={`bookmark-fold${b.collapsed ? ' is-collapsed' : ''}`}
+                    title={t(b.collapsed ? 'side.bookmarkExpand' : 'side.bookmarkCollapse')}
+                    aria-expanded={!b.collapsed}
+                    onClick={() => onToggleCollapsed(b.page)}
+                  >
+                    ▾
+                  </button>
+                ) : (
+                  <span className="bookmark-fold is-leaf" />
+                ))}
               <button
                 className="bookmark-main"
                 onClick={() => onJumpToPage(b.page)}
@@ -562,6 +602,22 @@ function BookmarkList({
               >
                 <span className="bookmark-page">{t('app.pageAbbrev')} {b.page}</span>
                 <span className="bookmark-label">{b.label || t('side.bookmarkUnnamed')}</span>
+              </button>
+              <button
+                className="bookmark-nest"
+                title={t('side.bookmarkIndent')}
+                disabled={indentBookmark(bookmarks, b.page) === bookmarks}
+                onClick={() => onIndent(b.page)}
+              >
+                ⇥
+              </button>
+              <button
+                className="bookmark-nest"
+                title={t('side.bookmarkOutdent')}
+                disabled={depth === 0}
+                onClick={() => onOutdent(b.page)}
+              >
+                ⇤
               </button>
               <button
                 className="bookmark-edit"

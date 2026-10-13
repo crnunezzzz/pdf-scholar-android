@@ -130,6 +130,13 @@ import AnnotPopover from './AnnotPopover'
 import LinkPreview from './LinkPreview'
 import AbstractBubble from './AbstractBubble'
 import { linkPreviewDelayMs } from '../link-preview'
+import {
+  indentBookmark,
+  outdentBookmark,
+  removeBookmark,
+  sanitizeBookmarks,
+  toggleCollapsed
+} from '../../../shared/bookmarks'
 import { PasswordPrompt } from './PasswordPrompt'
 import { SignaturePad } from './SignaturePad'
 import { SignatureInfo } from './SignatureInfo'
@@ -3112,7 +3119,7 @@ export default function PdfViewer({
   useEffect(() => {
     let stale = false
     void bridge.getBookmarks(payload.path).then((list) => {
-      if (!stale) setBookmarks([...list].sort((a, b) => a.page - b.page))
+      if (!stale) setBookmarks(sanitizeBookmarks(list))
     })
     return () => {
       stale = true
@@ -3133,7 +3140,8 @@ export default function PdfViewer({
     (page: number) => {
       const existing = bookmarksRef.current.find((b) => b.page === page)
       if (existing) {
-        persistBookmarks(bookmarksRef.current.filter((b) => b.page !== page))
+        // Its children, if any, move up to where it was (issue #43)
+        persistBookmarks([...removeBookmark(bookmarksRef.current, page)])
         showToast(t('viewer.bookmarkRemoved', { page }))
         return
       }
@@ -3151,6 +3159,27 @@ export default function PdfViewer({
     (page: number, label: string) => {
       persistBookmarks(bookmarksRef.current.map((b) => (b.page === page ? { ...b, label } : b)))
     },
+    [persistBookmarks]
+  )
+
+  // Nesting (issue #43): pure rules in src/shared/bookmarks.ts; the list on
+  // disk stays flat and page-ordered
+  const indentBookmarkAt = useCallback(
+    (page: number) => {
+      const next = indentBookmark(bookmarksRef.current, page)
+      if (next !== bookmarksRef.current) persistBookmarks([...next])
+    },
+    [persistBookmarks]
+  )
+  const outdentBookmarkAt = useCallback(
+    (page: number) => {
+      const next = outdentBookmark(bookmarksRef.current, page)
+      if (next !== bookmarksRef.current) persistBookmarks([...next])
+    },
+    [persistBookmarks]
+  )
+  const toggleBookmarkCollapsed = useCallback(
+    (page: number) => persistBookmarks([...toggleCollapsed(bookmarksRef.current, page)]),
     [persistBookmarks]
   )
 
@@ -7388,6 +7417,9 @@ export default function PdfViewer({
           bookmarks={bookmarks}
           onToggleBookmark={toggleBookmark}
           onRenameBookmark={renameBookmark}
+          onIndentBookmark={indentBookmarkAt}
+          onOutdentBookmark={outdentBookmarkAt}
+          onToggleBookmarkCollapsed={toggleBookmarkCollapsed}
           onExport={exportAnnotations}
           onAskAi={askAnnotations}
           docName={payload.name}
