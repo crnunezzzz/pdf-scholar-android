@@ -181,11 +181,8 @@ Sepia cream); Night and Night+ are the two dark modes, the second with higher co
   field jumps straight to a page number
 - Internal links and cross-references can be followed and returned from: back/forward
   navigation (Alt+← / Alt+→, or the mouse side-buttons) holds the history
-- Rest the pointer on a citation, a figure or an equation reference and a preview of what
-  it points to opens beside it, without moving the page (long-press on a touchscreen).
-  On a citation, one click fetches the cited paper's abstract from free scholarly
-  databases (arXiv, Europe PMC, Crossref, OpenAlex) — no key, no account. In the
-  reference list itself, select an entry and choose «Abstract» in the selection menu
+- Internal links can be previewed where they are cited — citations, figures, tables and
+  equations alike (see "Previews where you read" below)
 - Reading positions and recent files are remembered; a library home screen lists them —
   as a list, or as a grid of their first pages (three sizes) with how far you read each
   one. Pin the ones you keep coming back to into a group of their own, remove the ones
@@ -202,6 +199,24 @@ Sepia cream); Night and Night+ are the two dark modes, the second with higher co
 - The interface is in Norwegian, English or Simplified Chinese; the choice also applies
   to the AI prompts, exports and date formats. The Chinese is machine-translated from
   the English — corrections from native speakers are welcome as pull requests
+
+### Previews where you read
+
+Rest the pointer on a citation, a figure, a table or an equation reference and a preview
+of what it points to opens beside the text, without moving the page (long-press on a
+touchscreen). A citation shows its reference entry, and only that; a citation written as
+a range («5–9») shows every entry in it. A figure, a table or an equation gets a window
+onto the page it is on: scroll it, Ctrl+wheel to rescale it, drag the corner to make it
+bigger. Click inside to go there, Ctrl+click to open it in the other column.
+
+- On a citation, one click fetches the cited paper's abstract from free scholarly
+  databases (arXiv, Europe PMC, Crossref, OpenAlex) — no key, no account, and only on
+  that click. It folds out under the entry and closes on its own. In the reference list
+  itself, select an entry and choose «Abstract» in the selection menu
+- Roughly two in three citations find an abstract; books, working papers and some
+  paywalled journals often do not
+- "Preview links" in the settings menu turns the previews off, or sets how long the
+  pointer rests before one opens
 
 ### Two pages at once
 

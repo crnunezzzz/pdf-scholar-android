@@ -169,18 +169,10 @@ carries no picture of its own.)*
   back/forward buttons hold the navigation history *(navigation elevated to two
   bullets on Emil's ask, 2026-08-12: moving around a long document matters to
   him as much as the split view, and it was buried in a subclause)*
-- Rest the pointer on a citation, a figure or an equation reference and a
-  preview of what it points to opens beside it, without moving the page
-  (long-press on a touchscreen). On a citation, one click fetches the cited
-  paper's abstract from free scholarly databases (arXiv, Europe PMC, Crossref,
-  OpenAlex) — no key, no account; in the reference list itself, select an
-  entry and «Sammendrag» in the selection menu does the same *(reader ask, [issue #31](https://github.com/emilmsh/pdf-scholar/issues/31),
-  2026-10-10 — Sioyek's and Zotero's reader have the preview; the abstract is
-  the Hover PDF extension's idea, keyless. A click, never automatic: it is a
-  network call, and the app is offline unless you ask. Roughly two in three
-  citations find one — books, working papers and paywalled Elsevier papers
-  often do not, so never promise it for every citation. Supporting, not a
-  headline)*
+- Internal links can be previewed where they are cited — its own section,
+  pillar 1b below *(promoted from a bullet here on Emil's ask, 2026-10-13: the
+  README and the landing page should bring out that previews exist for every
+  kind of internal link, not only citations)*
 - The toolbar can be unpinned; the page then fills the window, and the toolbar
   and panels return on hover at the window edges
 - Reading positions and recent files are remembered. The library shows the
@@ -230,6 +222,36 @@ carries no picture of its own.)*
   client, another program's save — is reloaded in place when the tab has no
   unsaved marks; a tab with unsaved marks is offered the reload in a bar
   (issue #41, desktop only — a browser has no file watcher)
+
+### 1b. Previews where you read
+
+Rest the pointer on a citation, a figure, a table or an equation reference
+and a preview of what it points to opens beside the text, without moving the
+page (long-press on a touchscreen). A citation shows its reference entry, and
+only that; a citation written as a range («5–9») shows every entry in it. A
+figure, a table or an equation gets a window onto the page it is on: scroll
+it, Ctrl+wheel to rescale it, drag the corner to make it bigger. Click inside
+to go there, Ctrl+click to open it in the other column.
+
+- On a citation, one click fetches the cited paper's abstract from free
+  scholarly databases (arXiv, Europe PMC, Crossref, OpenAlex) — no key, no
+  account, and only on that click. It folds out under the entry and closes on
+  its own. In the reference list itself, select an entry and «Sammendrag» in
+  the selection menu does the same
+- Roughly two in three citations find an abstract; books, working papers and
+  some paywalled journals often do not *(never promise it for every citation)*
+- «Forhåndsvis lenker» in the settings menu turns the previews off, or sets
+  how long the pointer rests before one opens
+
+*(Reader ask, [issue #31](https://github.com/emilmsh/pdf-scholar/issues/31),
+2026-10-10 — Sioyek's and Zotero's reader have the preview; the abstract is the
+Hover PDF extension's idea, keyless. A click, never automatic: it is a network
+call, and the app is offline unless you ask. Shaped on 2026-10-13 (v0.61.1–3):
+a citation shows ONLY its entry, a figure a page window with a thin scrollbar
+and a corner grip, the abstract under the whole entry with its own cross; a
+sideways page is measured through its own transform. Its own section on Emil's
+ask the same day. No picture of its own yet — a frame would need a shot in
+`scripts/shoot-screenshots.mjs` and his judgement.)*
 
 ### 2. Split view
 
