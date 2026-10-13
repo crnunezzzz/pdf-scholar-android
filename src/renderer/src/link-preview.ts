@@ -367,19 +367,71 @@ export function isTwoColumn(lines: readonly TextLine[], pageWidth: number): bool
  *  unreadably small (issue #31, second round). */
 export function textExtent(
   lines: readonly TextLine[],
-  pageWidth: number
-): { x0: number; x1: number; twoColumn: boolean; columnW: number } {
+  pageWidth: number,
+  pageHeight = 792
+): { x0: number; x1: number; y0: number; y1: number; twoColumn: boolean; columnW: number } {
   const long = lines.filter((l) => l.x1 - l.x0 > pageWidth * 0.12)
-  if (long.length < 4) return { x0: 0, x1: pageWidth, twoColumn: false, columnW: pageWidth }
+  if (long.length < 4) return { x0: 0, x1: pageWidth, y0: 0, y1: pageHeight, twoColumn: false, columnW: pageWidth }
   const x0 = Math.min(...long.map((l) => l.x0))
   const x1 = Math.max(...long.map((l) => l.x1))
+  // The block's vertical reach too: a rotated page (a landscape table in a
+  // portrait thesis) shows this axis as its WIDTH, so the caller measures
+  // the block through the page's own transform rather than trusting x
+  const y0 = Math.min(...long.map((l) => l.y - l.size * 0.35))
+  const y1 = Math.max(...long.map((l) => l.y + l.size * 0.95))
   const twoColumn = isTwoColumn(lines, pageWidth)
-  if (!twoColumn) return { x0, x1, twoColumn, columnW: x1 - x0 }
+  if (!twoColumn) return { x0, x1, y0, y1, twoColumn, columnW: x1 - x0 }
   // The left column's right edge: the lines that start left of the middle
   // and end before the right column begins
   const left = long.filter((l) => l.x0 < pageWidth * 0.45 && l.x1 < pageWidth * 0.6)
   const columnW = left.length ? Math.max(...left.map((l) => l.x1)) - x0 : (x1 - x0) / 2
-  return { x0, x1, twoColumn, columnW }
+  return { x0, x1, y0, y1, twoColumn, columnW }
+}
+
+/** The box every text item on the page lies in, whatever direction the text
+ *  runs — the union of each item's own box, built from its transform (the
+ *  reading direction and the glyph height) and its advance. textLines reads
+ *  x as the reading direction, which is right for upright text and wrong on
+ *  a /Rotate 90 page whose content is drawn rotated (pdflscape): there the
+ *  rows advance along PDF y, and the page's extent must be measured this
+ *  way (Emil, 2026-10-13: a landscape table came out as a keyhole). Null
+ *  with no text. */
+export function textBounds(
+  items: readonly unknown[]
+): { x0: number; x1: number; top: number; bottom: number } | null {
+  let x0 = Infinity
+  let x1 = -Infinity
+  let y0 = Infinity
+  let y1 = -Infinity
+  for (const raw of items) {
+    const it = raw as { str?: unknown; transform?: unknown; width?: unknown }
+    if (typeof it.str !== 'string' || !it.str.trim() || !Array.isArray(it.transform)) continue
+    const tf = it.transform as number[]
+    const w = typeof it.width === 'number' ? it.width : 0
+    const len = Math.hypot(tf[0] ?? 1, tf[1] ?? 0) || 1
+    const size = Math.hypot(tf[2] ?? 0, tf[3] ?? 1) || 10
+    // Unit vectors: along the text, and up from the baseline
+    const dx = (tf[0] ?? 1) / len
+    const dy = (tf[1] ?? 0) / len
+    const px = (tf[2] ?? 0) / size
+    const py = (tf[3] ?? 1) / size
+    const ox = tf[4] ?? 0
+    const oy = tf[5] ?? 0
+    for (const [a, u] of [
+      [0, -0.35],
+      [w, -0.35],
+      [0, 0.95],
+      [w, 0.95]
+    ] as const) {
+      const x = ox + dx * a + px * size * u
+      const y = oy + dy * a + py * size * u
+      if (x < x0) x0 = x
+      if (x > x1) x1 = x
+      if (y < y0) y0 = y
+      if (y > y1) y1 = y
+    }
+  }
+  return x0 === Infinity ? null : { x0, x1, top: y1, bottom: y0 }
 }
 
 /** The scale the window reads the page at: the column fits the window's

@@ -170,6 +170,16 @@ const check = (label, cond, detail = '') => {
   check('scale: a fit that is exact stays', M.previewScale(480, 600) === 1.2)
   check('scale: a narrow column is read larger, up to 160 %', M.previewScale(240, 600) === 1.6)
   check('scale: never below 100 %', M.previewScale(1200, 300) === 1)
+  check('scale: a wide block may shrink to the floor it is given', M.previewScale(800, 600) === 1 && M.previewScale(800, 600, 0.75) === 0.75 && M.previewScale(700, 600, 0.75) === 0.8)
+  check("extent: the block's vertical reach", (() => { const e = M.textExtent(one, 612, 792); return e.y1 === 709.5 && e.y0 === 700 - 11 * 14 - 3.5 })())
+  // textBounds: an item's box follows its direction. Upright: the advance
+  // runs along x; drawn rotated (pdflscape): along y, and the glyph height
+  // along -x — so a landscape table's reading width is its PDF y-extent
+  const upright = M.textBounds([{ str: 'abc', transform: [10, 0, 0, 10, 72, 700], width: 300 }])
+  check('bounds: upright text runs along x', upright.x0 === 72 && upright.x1 === 372 && upright.bottom === 696.5 && upright.top === 709.5, JSON.stringify(upright))
+  const rotated = M.textBounds([{ str: 'abc', transform: [0, 11, -11, 0, 100, 200], width: 300 }, { str: ' ', transform: [0, 11, -11, 0, 500, 500], width: 50 }])
+  check('bounds: rotated text runs along y, a blank item ignored', rotated.bottom === 200 && rotated.top === 500 && Math.abs(rotated.x0 - (100 - 10.45)) < 1e-9 && Math.abs(rotated.x1 - (100 + 3.85)) < 1e-9, JSON.stringify(rotated))
+  check('bounds: no text → null', M.textBounds([]) === null)
   check('scale: no column width → 100 %', M.previewScale(0, 600) === 1 && M.previewScale(NaN, 600) === 1)
 
   check('range: «5–9»', JSON.stringify(M.citedRange('5–9')) === '[5,9]')

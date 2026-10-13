@@ -46,6 +46,7 @@ import {
   previewSize,
   rangeEnd,
   resolvePreviewTarget,
+  textBounds,
   textExtent,
   textLines
 } from '../link-preview'
@@ -229,23 +230,44 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     const dstPage = await rec.pdf.getPage(target.pageIndex + 1).catch(() => null)
     let scale = 1.25
     let rangeEndY: number | null = null
-    /** The text block's right edge, so the window never starts so far right
+    /** The text block, in PDF space, so the window never starts so far right
      *  that it loses the end of the lines (the destination's x is the
      *  entry's indent, not the block's edge) */
-    let blockRight: number | null = null
+    let block: PdfRect | null = null
     /** A citation's own entry (and a range's last one): the window is cut
      *  to exactly these lines */
-    let entryRect: { top: number; bottom: number; x0: number; x1: number } | null = null
-    if (dstPage) {
+    let entryRect: PdfRect | null = null
+    // Every measure goes through the page's own transform (viewportBox):
+    // a landscape table in a portrait thesis is a /Rotate 90 page whose
+    // text runs along PDF y, and reading its x as the width made the
+    // window a keyhole with a sideways bar (Emil, 2026-10-13)
+    const base = dstPage?.getViewport({ scale: 1, rotation: (dstPage.rotate + rec.rotation) % 360 })
+    if (dstPage && base) {
       const content = await dstPage.getTextContent().catch(() => null)
       const pageWidth = (dstPage.view[2] ?? 612) - (dstPage.view[0] ?? 0)
+      const pageHeight = (dstPage.view[3] ?? 792) - (dstPage.view[1] ?? 0)
       const lines = content ? textLines(content.items) : []
       if (content) {
-        const extent = textExtent(lines, pageWidth)
-        scale = previewScale(extent.columnW, box.w)
-        blockRight = extent.x1
+        const extent = textExtent(lines, pageWidth, pageHeight)
+        // A page shown sideways (/Rotate 90, or turned by the reader) has
+        // its text drawn rotated more often than not, and textLines then
+        // reads the glyph height as the line's length: measure every item's
+        // own box instead, direction and all
+        const sideways = base.rotation % 180 !== 0
+        block = sideways
+          ? (textBounds(content.items) ?? { x0: 0, x1: pageWidth, top: pageHeight, bottom: 0 })
+          : { x0: extent.x0, x1: extent.x1, top: extent.y1, bottom: extent.y0 }
+        const blockPx = viewportBox(base, block)
+        const blockW = blockPx.r - blockPx.l
+        // A column (or the block) wider than the window at 100 %: the window
+        // grows first, up to most of the screen, and the text shrinks only
+        // after that — and never below 75 %
+        const twoColumn = extent.twoColumn && !sideways
+        const columnPx = twoColumn ? (extent.columnW / (extent.x1 - extent.x0)) * blockW : blockW
+        if (columnPx + 24 > box.w) box.w = Math.min(Math.round(window.innerWidth * 0.8), Math.ceil(columnPx) + 24)
+        scale = previewScale(columnPx, box.w, columnPx + 24 > box.w ? 0.75 : 1)
         // A two-column page: the window is one column wide, not two
-        if (extent.twoColumn) box.w = Math.max(200, Math.min(box.w, Math.ceil(extent.columnW * scale) + 36))
+        if (twoColumn) box.w = Math.max(200, Math.min(box.w, Math.ceil(columnPx * scale) + 36))
       }
       if (target.kind === 'citation' && target.y !== null) {
         const siblings = await familySiblings(rec.pdf, target, dstPage)
@@ -266,7 +288,10 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
         entryRect = entryBox([...first, ...last])
         // The entry's own width is what has to fit — a reference list's
         // lines are often wider than the page's measured text block
-        if (entryRect) scale = previewScale(entryRect.x1 - entryRect.x0, box.w)
+        if (entryRect) {
+          const e = viewportBox(base, entryRect)
+          scale = previewScale(e.r - e.l, box.w, e.r - e.l + 24 > box.w ? 0.75 : 1)
+        }
       }
     }
     if (mine !== seq.current) return
@@ -290,8 +315,7 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     let entryFits = false
     if (entryRect) {
       // Cut to the entry: its lines, a little air, nothing of the neighbours
-      const [l, t] = img.viewport.convertToViewportPoint(entryRect.x0, entryRect.top)
-      const [r, b] = img.viewport.convertToViewportPoint(entryRect.x1, entryRect.bottom)
+      const { l, t, r, b } = viewportBox(img.viewport, entryRect)
       const need = Math.ceil(b - t) + 12
       // As wide as the entry needs, within the screen: the 600 px default is
       // a ceiling for page windows, not for a line that must come out whole
@@ -313,8 +337,8 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       box.w = Math.min(box.w, Math.ceil(img.w))
       scroll = previewScroll(target.kind, vx, vy, box, { w: img.w, h: img.h }, captionAbove)
       // …but never so far right that the lines' ends fall outside it
-      if (blockRight !== null) {
-        const [edge] = img.viewport.convertToViewportPoint(blockRight, 0)
+      if (block) {
+        const edge = viewportBox(img.viewport, block).r
         scroll.left = Math.max(0, Math.min(scroll.left, Math.ceil(edge) + 12 - box.w))
       }
     }
@@ -682,6 +706,31 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
 /** A preview that cannot be drawn simply does not open; the link still works */
 function previewFailed(err: unknown): void {
   console.warn('pdfx: klarte ikke å forhåndsvise lenken', err)
+}
+
+/** A box in PDF user space (y up) */
+interface PdfRect {
+  x0: number
+  x1: number
+  top: number
+  bottom: number
+}
+
+/** The box as the viewport shows it, in its CSS pixels — through the page's
+ *  rotation, so a /Rotate 90 page's x-extent correctly comes out as height */
+function viewportBox(
+  vp: { convertToViewportPoint(x: number, y: number): number[] },
+  r: PdfRect
+): { l: number; t: number; r: number; b: number } {
+  const pts = [
+    vp.convertToViewportPoint(r.x0, r.top),
+    vp.convertToViewportPoint(r.x1, r.top),
+    vp.convertToViewportPoint(r.x0, r.bottom),
+    vp.convertToViewportPoint(r.x1, r.bottom)
+  ]
+  const xs = pts.map((p) => p[0]!)
+  const ys = pts.map((p) => p[1]!)
+  return { l: Math.min(...xs), t: Math.min(...ys), r: Math.max(...xs), b: Math.max(...ys) }
 }
 
 function anchorOfTarget(el: EventTarget | null): Element | null {
