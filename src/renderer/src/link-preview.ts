@@ -359,6 +359,67 @@ export function isTwoColumn(lines: readonly TextLine[], pageWidth: number): bool
   return long.length >= 6 && crossing < long.length * 0.2
 }
 
+/** Where a page's text runs, and the width the window should FIT: one column
+ *  of a two-column page, the text block of a one-column page, the whole page
+ *  when there is too little text to tell. The preview's scale follows from
+ *  it (previewScale) instead of from the document's zoom, which made a
+ *  fit-width page's window a keyhole onto one column and a fit-page window
+ *  unreadably small (issue #31, second round). */
+export function textExtent(
+  lines: readonly TextLine[],
+  pageWidth: number
+): { x0: number; x1: number; twoColumn: boolean; columnW: number } {
+  const long = lines.filter((l) => l.x1 - l.x0 > pageWidth * 0.12)
+  if (long.length < 4) return { x0: 0, x1: pageWidth, twoColumn: false, columnW: pageWidth }
+  const x0 = Math.min(...long.map((l) => l.x0))
+  const x1 = Math.max(...long.map((l) => l.x1))
+  const twoColumn = isTwoColumn(lines, pageWidth)
+  if (!twoColumn) return { x0, x1, twoColumn, columnW: x1 - x0 }
+  // The left column's right edge: the lines that start left of the middle
+  // and end before the right column begins
+  const left = long.filter((l) => l.x0 < pageWidth * 0.45 && l.x1 < pageWidth * 0.6)
+  const columnW = left.length ? Math.max(...left.map((l) => l.x1)) - x0 : (x1 - x0) / 2
+  return { x0, x1, twoColumn, columnW }
+}
+
+/** The scale the window reads the page at: the column fits the window's
+ *  width with a little air on each side, never below 100 % (a fitted page on
+ *  a small screen) and never above 160 % (a glimpse, not a loupe). In 5 %
+ *  steps, so the render cache is hit again by the next link on the page. */
+export function previewScale(columnW: number, boxW: number, min = 1, max = 1.6): number {
+  if (!(columnW > 0)) return min
+  return Math.round(clamp((boxW - 24) / columnW, min, max) * 20) / 20
+}
+
+/** «5–9», «[5-9]», «5–9]»: the span of works a citation's own text names
+ *  (Zotero shows all of them; so do we). Null for one number, or for a range
+ *  no reference list has — past 40 it is a page range or a year. */
+export function citedRange(text: string): [number, number] | null {
+  const m = /^\s*\[?\s*(\d{1,3})\s*[–—-]\s*(\d{1,3})\s*[\]),.;]*\s*$/.exec(text)
+  if (!m) return null
+  const a = Number(m[1])
+  const b = Number(m[2])
+  return b > a && b - a <= 40 ? [a, b] : null
+}
+
+/** For `count` entries from `dest` down the list: the y where the LAST of
+ *  them starts, so the window can be made tall enough to hold them all.
+ *  By the destinations' labels when the family carries them (`bib12` →
+ *  `bib16`), by their top-down order otherwise (hyperref's `cite.` keys).
+ *  Null when the range runs past this page. */
+export function rangeEnd(dest: DestPoint, siblings: readonly DestPoint[], count: number): number | null {
+  if (count <= 1) return dest.y
+  if (dest.n != null) {
+    const last = siblings.find((s) => s.n === dest.n! + count - 1)
+    if (last) return last.y
+  }
+  // Top-down: PDF y grows upward, so the first entry has the largest y
+  const all = [dest, ...siblings.filter((s) => s.y !== dest.y || s.x !== dest.x)].sort((p, q) => q.y - p.y)
+  const i = all.findIndex((p) => p.y === dest.y && p.x === dest.x)
+  const last = all[i + count - 1]
+  return last ? last.y : null
+}
+
 const BACK_MATTER = /^(acknowledg|funding|author contributions|competing interests|conflicts? of interest|data availability|appendix|supplementary)/i
 
 /** The entry's lines, top-down, joined by newlines. `siblings` are the
@@ -512,6 +573,38 @@ export function destEntries(table: unknown): [string, unknown][] {
   return []
 }
 
+/** The family's other destinations on the target's page — the reference
+ *  list's other entries, as far as the document names them. Empty for a
+ *  destination without a name (an explicit /XYZ link). */
+export async function familySiblings(
+  pdf: PDFDocumentProxy,
+  target: PreviewTarget,
+  page: Awaited<ReturnType<PDFDocumentProxy['getPage']>>
+): Promise<DestPoint[]> {
+  const siblings: DestPoint[] = []
+  if (!target.name) return siblings
+  let table = destTables.get(pdf)
+  if (!table) {
+    table = pdf
+      .getDestinations()
+      .then((d: unknown) => destEntries(d))
+      .catch(() => [])
+    destTables.set(pdf, table)
+  }
+  const family = destFamily(target.name)
+  const ref = (page as unknown as { ref?: { num: number; gen: number } }).ref
+  for (const [name, d] of await table) {
+    if (name === target.name || !Array.isArray(d) || destFamily(name) !== family) continue
+    const r = d[0] as { num?: number; gen?: number } | number | null
+    const onPage =
+      typeof r === 'number' ? r === target.pageIndex : !!ref && !!r && r.num === ref.num && r.gen === ref.gen
+    if (!onPage) continue
+    const [x, y] = destPoint(d)
+    if (y !== null) siblings.push({ x, y, n: destLabel(name) })
+  }
+  return siblings
+}
+
 /** The text of the reference-list entry a citation points at; '' when the
  *  destination names no point or the page has no text there. */
 export async function citationEntryText(pdf: PDFDocumentProxy, target: PreviewTarget): Promise<string> {
@@ -520,30 +613,7 @@ export async function citationEntryText(pdf: PDFDocumentProxy, target: PreviewTa
     const page = await pdf.getPage(target.pageIndex + 1)
     const content = await page.getTextContent()
     const lines = textLines(content.items)
-    const siblings: DestPoint[] = []
-    if (target.name) {
-      let table = destTables.get(pdf)
-      if (!table) {
-        table = pdf
-          .getDestinations()
-          .then((d: unknown) => destEntries(d))
-          .catch(() => [])
-        destTables.set(pdf, table)
-      }
-      const family = destFamily(target.name)
-      const ref = (page as unknown as { ref?: { num: number; gen: number } }).ref
-      for (const [name, d] of await table) {
-        if (name === target.name || !Array.isArray(d) || destFamily(name) !== family) continue
-        const r = d[0] as { num?: number; gen?: number } | number | null
-        const onPage =
-          typeof r === 'number'
-            ? r === target.pageIndex
-            : !!ref && !!r && r.num === ref.num && r.gen === ref.gen
-        if (!onPage) continue
-        const [x, y] = destPoint(d)
-        if (y !== null) siblings.push({ x, y, n: destLabel(name) })
-      }
-    }
+    const siblings = await familySiblings(pdf, target, page)
     const width = (page.view[2] ?? 612) - (page.view[0] ?? 0)
     return entryFromLines(lines, { x: target.x, y: target.y }, siblings, destLabel(target.name), width)
   } catch {

@@ -150,6 +150,50 @@ const check = (label, cond, detail = '') => {
   check('a garbage delay reads as medium', M.linkPreviewDelayMs('forever') === M.linkPreviewDelayMs('medium') && M.linkPreviewDelayMs(undefined) === M.linkPreviewDelayMs('medium'))
 }
 
+// ------------------------------- tier 1a: scale, cited ranges (second round)
+{
+  // A one-column page: the text block is what the window fits
+  const one = []
+  for (let i = 0; i < 12; i++) one.push({ x0: 72, x1: 540, y: 700 - i * 14, size: 10, text: 'a line of running text that is long' })
+  const ext1 = M.textExtent(one, 612)
+  check('one column: the text block', !ext1.twoColumn && ext1.x0 === 72 && ext1.x1 === 540 && ext1.columnW === 468, JSON.stringify(ext1))
+  // A two-column page: one column is what the window fits
+  const two = []
+  for (let i = 0; i < 12; i++) {
+    two.push({ x0: 56, x1: 296, y: 700 - i * 14, size: 10, text: 'left column text, a long line' })
+    two.push({ x0: 316, x1: 556, y: 700 - i * 14, size: 10, text: 'right column text, a long line' })
+  }
+  const ext2 = M.textExtent(two, 612)
+  check('two columns: one column\'s width', ext2.twoColumn && ext2.columnW === 240 && ext2.x0 === 56, JSON.stringify(ext2))
+  check('too little text: the whole page', M.textExtent([{ x0: 72, x1: 300, y: 700, size: 10, text: 'Figure 1' }], 612).columnW === 612)
+  check('scale: the column fits the window with air', M.previewScale(468, 600) === 1.25, String(M.previewScale(468, 600)))
+  check('scale: a narrow column is read larger, up to 160 %', M.previewScale(240, 600) === 1.6)
+  check('scale: never below 100 %', M.previewScale(1200, 300) === 1)
+  check('scale: no column width → 100 %', M.previewScale(0, 600) === 1 && M.previewScale(NaN, 600) === 1)
+
+  check('range: «5–9»', JSON.stringify(M.citedRange('5–9')) === '[5,9]')
+  check('range: «[12-15]»', JSON.stringify(M.citedRange('[12-15]')) === '[12,15]')
+  check('range: «5–9],» (the link\'s box ends on the bracket)', JSON.stringify(M.citedRange('5–9],')) === '[5,9]')
+  check('not a range: one number', M.citedRange('[7]') === null)
+  check('not a range: a year', M.citedRange('2017') === null)
+  check('not a range: a span no reference list has («1–80»)', M.citedRange('1–80') === null)
+  check('not a range: backwards', M.citedRange('9–5') === null)
+  check('not a range: prose', M.citedRange('see 5–9 below') === null)
+
+  // Entries 5..9 down a numbered list: labelled destinations are matched by
+  // label, unlabelled ones by top-down order
+  const labelled = [5, 6, 7, 8, 9, 10].map((n) => ({ x: 72, y: 700 - (n - 5) * 40, n }))
+  const [d5, ...rest] = labelled
+  check('range end by label: 5–9 ends where 9 starts', M.rangeEnd(d5, rest, 5) === 700 - 160)
+  const unlabelled = labelled.map(({ x, y }) => ({ x, y, n: null }))
+  check('range end by order: the fifth entry down', M.rangeEnd(unlabelled[0], unlabelled.slice(1), 5) === 700 - 160)
+  check('range past the page: null', M.rangeEnd(unlabelled[0], unlabelled.slice(1), 9) === null)
+  check('a single entry ends where it starts', M.rangeEnd(d5, rest, 1) === 700)
+  // Siblings in any order, the dest itself among them
+  const shuffled = [labelled[3], labelled[1], labelled[5], labelled[0], labelled[4], labelled[2]]
+  check('order does not matter', M.rangeEnd(labelled[0], shuffled, 3) === 700 - 80)
+}
+
 // -------------------------------------- tier 1b: the reference-list entry
 {
   const items = [

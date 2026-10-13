@@ -575,6 +575,16 @@ regressions are treated as bugs, not as acceptable platform lag.
     identical everywhere. Covered by `npm run test:session` and
     `test:recent-thumbs` (CI), and by `test:session-desktop`, `test:recents-grid`
     and `test:paged` (desktop session).
+30. **A document that changes on disk follows the file on the desktop only.**
+    (issue #41, 2026-10-13) main watches every open document's folder
+    (`src/main/index.ts`, «Files changing on disk»), waits for the write to
+    finish and ignores its own saves; `App.tsx` reloads a clean tab in place
+    with a notice and offers a tab with unsaved marks the reload in a bar. The
+    extension reads a `file://` or `http(s)://` URL once and has no watcher to
+    hand it — Chromium exposes none for either — so there a changed file is
+    re-opened by hand (the tab's reload), exactly as Edge's own viewer has it.
+    `onFileChangedOnDisk` is a no-op in `bridge.ts`. Covered by
+    `npm run test:disk-reload` (desktop session).
 
 ## Maintenance rules
 

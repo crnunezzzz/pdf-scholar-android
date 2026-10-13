@@ -3120,9 +3120,11 @@ html.pen-near .draw-layer {
 }
 
 .link-preview-scroll {
-  /* Up and down only: the window starts at the destination's column, and a
-     sideways bar under a two-line entry is chrome for nothing */
-  overflow: hidden auto;
+  /* Both ways: the window starts at the destination's column, but a column
+     wider than the window (a figure, a wide equation) must not be a keyhole
+     (issue #31, second round) — the wheel scrolls, Shift+wheel sideways,
+     Ctrl+wheel rescales */
+  overflow: auto;
   /* The wheel at the window's end must not scroll the page under it */
   overscroll-behavior: contain;
   cursor: pointer;

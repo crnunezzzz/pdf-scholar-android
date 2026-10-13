@@ -5,6 +5,8 @@
 // reading of its answer.
 
 import { forwardRef } from 'react'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import { errorText, t } from '../i18n'
 import { bridge } from '../bridge'
 import { doiUrl } from '../../../shared/doi'
@@ -15,6 +17,38 @@ export type AbstractState =
   | { state: 'loading' }
   | { state: 'done'; result: CitationAbstract }
   | { state: 'error'; error: FileError }
+
+/** Abstracts from arXiv and the others carry TeX — «$\alpha$», «\(x\)» —
+ *  rendered with KaTeX as the assistant's answers are (issue #31, second
+ *  round). A dollar sign is money more often than math outside physics, so
+ *  «$…$» counts only when its inside looks like TeX: a backslash, a sub- or
+ *  superscript, braces, a relation — or a short bare symbol («$n$»). Bad TeX
+ *  degrades to its source, never to a broken panel. */
+function withMath(text: string): React.ReactNode {
+  const parts = text.split(/(\$\$[^$]+\$\$|\$[^$\n]+\$|\\\([\s\S]+?\\\))/g)
+  if (parts.length === 1) return text
+  return parts.map((part, i) => {
+    const display = part.startsWith('$$')
+    const tex = display
+      ? part.slice(2, -2)
+      : part.startsWith('\\(')
+        ? part.slice(2, -2)
+        : part.startsWith('$')
+          ? part.slice(1, -1)
+          : null
+    if (tex === null) return part
+    if (part.startsWith('$') && !display && !/[\\^_{}=<>]|^[A-Za-z0-9]{1,3}$/.test(tex.trim())) return part
+    return (
+      <span
+        key={i}
+        className={display ? 'ai-math-block' : 'ai-math'}
+        dangerouslySetInnerHTML={{
+          __html: katex.renderToString(tex, { throwOnError: false, displayMode: display })
+        }}
+      />
+    )
+  })
+}
 
 const SOURCE_NAMES: Record<Exclude<CitationAbstract['source'], ''>, string> = {
   arxiv: 'arXiv',
@@ -49,7 +83,7 @@ export const AbstractBody = forwardRef<
           {result.abstract ? (
             result.abstract.split(/\n{2,}/).map((p, i) => (
               <p key={i} className="lpa-text">
-                {p}
+                {withMath(p)}
               </p>
             ))
           ) : (

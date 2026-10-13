@@ -222,8 +222,14 @@ carries no picture of its own.)*
   browser extension attachments download instead of opening. *Supporting, not a
   headline (Emil's ask, 2026-10-02, after a filing whose nine spreadsheet
   exhibits the app did not show at all).*
-- Interface in Norwegian and English; the choice also applies to the AI
-  prompts, exports and date formats
+- Interface in Norwegian, English and Simplified Chinese; the choice also
+  applies to the AI prompts, exports and date formats. The Chinese is
+  machine-translated from the English (issue #32, 2026-10-13) — say so where
+  the languages are listed, and that corrections are welcome as pull requests
+- A document that changes on disk while it is open — a LaTeX build, a sync
+  client, another program's save — is reloaded in place when the tab has no
+  unsaved marks; a tab with unsaved marks is offered the reload in a bar
+  (issue #41, desktop only — a browser has no file watcher)
 
 ### 2. Split view
 

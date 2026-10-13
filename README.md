@@ -199,8 +199,9 @@ Sepia cream); Night and Night+ are the two dark modes, the second with higher co
   it inside the app instead: onto another window, or out onto the desktop for a window of
   its own ("Move to new window" in the tab menu does the same). With a finger or pen the
   tab always drags the in-app way
-- The interface is in Norwegian or English; the choice also applies to the AI prompts,
-  exports and date formats
+- The interface is in Norwegian, English or Simplified Chinese; the choice also applies
+  to the AI prompts, exports and date formats. The Chinese is machine-translated from
+  the English — corrections from native speakers are welcome as pull requests
 
 ### Two pages at once
 

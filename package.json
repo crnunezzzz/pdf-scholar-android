@@ -67,6 +67,7 @@
     "test:tab-drag": "node scripts/test-tab-drag.mjs",
     "test:assistant": "node scripts/test-assistant-window.mjs",
     "test:torn-read": "node scripts/test-torn-read.mjs",
+    "test:disk-reload": "node scripts/test-disk-reload.mjs",
     "test:recents-grid": "node scripts/test-recents-grid.mjs",
     "test:session-desktop": "node scripts/test-session-desktop.mjs",
     "test:paged": "node scripts/test-paged.mjs",

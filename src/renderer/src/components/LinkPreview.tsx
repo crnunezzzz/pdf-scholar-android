@@ -30,13 +30,20 @@ import { AbstractBody, AbstractSource } from './AbstractView'
 import type { AbstractState } from './AbstractView'
 import {
   citationEntryText,
+  citedRange,
+  destLabel,
   destOnFigureCaption,
+  familySiblings,
   LINK_RECORDS,
   placeExpanded,
   placePreview,
+  previewScale,
   previewScroll,
   previewSize,
-  resolvePreviewTarget
+  rangeEnd,
+  resolvePreviewTarget,
+  textExtent,
+  textLines
 } from '../link-preview'
 import type { LinkKind, LinkRecord, PreviewTarget } from '../link-preview'
 
@@ -63,6 +70,12 @@ interface Open {
   scroll: { left: number; top: number }
   box: { w: number; h: number }
   at: { left: number; top: number; below: boolean }
+  /** The page image's scale — Ctrl+wheel over the window changes it */
+  scale: number
+  /** The works a cited range («5–9») names: the window holds them all, and
+   *  the abstract button stands down (one abstract for five works would be
+   *  a guess about which) */
+  range: [number, number] | null
 }
 
 /** What «Sammendrag» found, per document and destination — a second hover on
@@ -178,17 +191,36 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     const mine = ++seq.current
     const target = await resolvePreviewTarget(rec.pdf, rec.dest)
     if (!target || mine !== seq.current) return
-    // Read at the size the reader reads: the anchor's page tells the zoom.
-    // Never below 100 % (a fitted page on a small window would make the
-    // window's text unreadable) and never past 200 %.
-    const pageEl = anchor.closest('.pdf-page') as HTMLElement | null
-    const srcPage = await rec.pdf.getPage(Number(pageEl?.dataset.page) || 1).catch(() => null)
+    // The link's own words: a cited range («5–9») shows every entry it names
+    const range = target.kind === 'citation' && target.y !== null ? citedRange(linkText(anchor)) : null
+    const box = previewSize(target.kind, window.innerWidth, window.innerHeight)
+    // Read at the scale that fits the page's column into the window —
+    // independent of the document's zoom, which made a fit-width page's
+    // window a keyhole onto one column and a fit-page window unreadably small
+    // (issue #31, second round). The page's text is measured for it; the
+    // same page gives the range its last entry.
+    const dstPage = await rec.pdf.getPage(target.pageIndex + 1).catch(() => null)
     let scale = 1.25
-    if (pageEl && srcPage) {
-      const base = srcPage.getViewport({ scale: 1, rotation: (srcPage.rotate + rec.rotation) % 360 })
-      if (base.width > 0) scale = pageEl.getBoundingClientRect().width / base.width
+    let rangeEndY: number | null = null
+    if (dstPage) {
+      const content = await dstPage.getTextContent().catch(() => null)
+      if (content) {
+        const pageWidth = (dstPage.view[2] ?? 612) - (dstPage.view[0] ?? 0)
+        const extent = textExtent(textLines(content.items), pageWidth)
+        scale = previewScale(extent.columnW, box.w)
+        // A two-column page: the window is one column wide, not two
+        if (extent.twoColumn) box.w = Math.max(200, Math.min(box.w, Math.ceil(extent.columnW * scale) + 36))
+      }
+      if (range && target.y !== null) {
+        const siblings = await familySiblings(rec.pdf, target, dstPage)
+        rangeEndY = rangeEnd(
+          { x: target.x, y: target.y, n: destLabel(target.name) },
+          siblings,
+          range[1] - range[0] + 1
+        )
+      }
     }
-    scale = Math.min(2, Math.max(1, Math.round(scale * 20) / 20))
+    if (mine !== seq.current) return
     const [img, captionAbove] = await Promise.all([
       renderPage(rec.pdf, target.pageIndex, scale, rec.rotation),
       target.kind === 'figure' && target.y !== null
@@ -203,7 +235,14 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       vx = target.x === null ? null : px
       vy = target.y === null ? null : py
     }
-    const box = previewSize(target.kind, window.innerWidth, window.innerHeight)
+    if (range && target.y !== null && vy !== null) {
+      // Tall enough for every entry in the range: from the first to where
+      // the last one starts, plus a few lines of it. A range that runs past
+      // the page shows to the page's foot.
+      const lastY = rangeEndY ?? (img.viewport.viewBox[1] ?? 0)
+      const [, pyLast] = img.viewport.convertToViewportPoint(target.x ?? 0, lastY)
+      box.h = Math.max(box.h, Math.min(Math.round(window.innerHeight * 0.6), Math.ceil(pyLast - vy) + Math.round(52 * scale)))
+    }
     // A page narrower than the window: the window narrows to it
     box.w = Math.min(box.w, Math.ceil(img.w))
     const scroll = previewScroll(target.kind, vx, vy, box, { w: img.w, h: img.h }, captionAbove)
@@ -228,6 +267,8 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       vy,
       scroll,
       box,
+      scale,
+      range,
       at
     })
   }, [])
@@ -240,6 +281,46 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     scroller.querySelector('.link-preview-canvas-host')?.replaceChildren(open.canvas)
     scroller.scrollLeft = open.scroll.left
     scroller.scrollTop = open.scroll.top
+  }, [open])
+
+  /** Ctrl+wheel (a pinch, too) over the window: the window's own scale, the
+   *  point under its top-left corner kept. «Cropped and no way to zoom out»
+   *  was the second-round report on issue #31. */
+  const rescale = async (o: Open | null, factor: number): Promise<void> => {
+    if (!o) return
+    const scale = Math.round(Math.min(3, Math.max(0.5, o.scale * factor)) * 20) / 20
+    if (scale === o.scale) return
+    const img = await renderPage(o.rec.pdf, o.pageIndex, scale, o.rec.rotation)
+    if (openRef.current !== o) return
+    const k = scale / o.scale
+    const sc = scrollerRef.current
+    // Zooming is reading: the window stays when the pointer leaves it
+    pinnedRef.current = true
+    setOpen({
+      ...o,
+      scale,
+      canvas: img.canvas,
+      pageW: img.w,
+      pageH: img.h,
+      vx: o.vx === null ? null : o.vx * k,
+      vy: o.vy === null ? null : o.vy * k,
+      scroll: { left: (sc?.scrollLeft ?? o.scroll.left) * k, top: (sc?.scrollTop ?? o.scroll.top) * k }
+    })
+  }
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (!el || !open) return
+    // Native and non-passive: preventDefault keeps the page's own ctrl+wheel
+    // zoom (and the browser's) out of it, stopPropagation keeps the viewer's
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      rescale(openRef.current, e.deltaY < 0 ? 1.15 : 1 / 1.15).catch(previewFailed)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   // ---- Pointer choreography, delegated from the viewer root ----
@@ -456,7 +537,7 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       : { left: open.at.left, bottom: winH - (open.at.top + open.box.h + FOOT_PX), width: open.box.w }
   const pageH = hasPanel ? Math.min(COMPACT_PAGE_PX, open.box.h) : open.box.h
   const panelMax = placed?.height != null ? Math.max(80, placed.height - pageH - FOOT_PX) : undefined
-  const canAsk = open.kind === 'citation' && open.target.y !== null
+  const canAsk = open.kind === 'citation' && open.target.y !== null && !open.range
   return (
     <div
       ref={boxRef}
@@ -491,7 +572,10 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       </div>
       <AbstractBody ref={panelRef} abs={abs} onRetry={() => void askAbstract(open)} maxHeight={panelMax} />
       <div className="link-preview-foot" {...footHandle}>
-        <span>{t('linkPreview.page', { page: open.pageIndex + 1 })}</span>
+        <span>
+          {t('linkPreview.page', { page: open.pageIndex + 1 })}
+          {open.range && ` · ${open.range[0]}–${open.range[1]}`}
+        </span>
         {canAsk && abs.state === 'idle' && (
           <button
             type="button"
@@ -516,4 +600,33 @@ function previewFailed(err: unknown): void {
 
 function anchorOfTarget(el: EventTarget | null): Element | null {
   return ((el as Element | null)?.closest?.('a.pdf-link.internal') as Element | null) ?? null
+}
+
+/** The characters under the link's box, read off the page's text layer:
+ *  what the citation itself says («5–9», «[12]»). A link's box often starts
+ *  and ends mid-span, so the spans it touches are walked one character at a
+ *  time and only the characters inside the box count. */
+function linkText(anchor: HTMLElement): string {
+  const page = anchor.closest('.pdf-page')
+  if (!page) return ''
+  const box = anchor.getBoundingClientRect()
+  if (box.width === 0) return ''
+  const midY = (box.top + box.bottom) / 2
+  let out = ''
+  const range = document.createRange()
+  for (const span of page.querySelectorAll<HTMLElement>('.text-host .textLayer > span')) {
+    const r = span.getBoundingClientRect()
+    if (r.right < box.left || r.left > box.right || midY < r.top - 2 || midY > r.bottom + 2) continue
+    const node = span.firstChild
+    if (!node || node.nodeType !== Node.TEXT_NODE) continue
+    const text = node.textContent ?? ''
+    for (let i = 0; i < text.length; i++) {
+      range.setStart(node, i)
+      range.setEnd(node, i + 1)
+      const c = range.getBoundingClientRect()
+      const cx = (c.left + c.right) / 2
+      if (cx >= box.left - 1 && cx <= box.right + 1) out += text[i]
+    }
+  }
+  return out
 }
