@@ -340,11 +340,30 @@ section('anthropic: family rules (fable / haiku / caps override)')
   const own = await run({ models: { anthropic: 'claude-opus-5-5', openai: '', azure: '', mock: '' } })
   ok(own.result.ok === true && own.result.fallbackModel === undefined, 'no fallbackModel when the chosen model answered')
 
-  // Haiku ignores thinking AND effort entirely.
+  // Haiku 4.5 (legacy, stored selections only) ignores thinking AND effort
+  // entirely.
   responder = () => anthropicSse({ model: 'claude-haiku-4-5', deltas: ['ok'] })
   await run({ models: { anthropic: 'claude-haiku-4-5', openai: '', azure: '', mock: '' }, thinking: 'high' })
-  ok(calls[0]?.body?.thinking === undefined && calls[0]?.body?.output_config === undefined, 'haiku: no thinking, no effort')
-  ok(calls[0]?.body?.max_tokens === 4096, 'haiku: 4096 max_tokens')
+  ok(calls[0]?.body?.thinking === undefined && calls[0]?.body?.output_config === undefined, 'haiku 4.5: no thinking, no effort')
+  ok(calls[0]?.body?.max_tokens === 4096, 'haiku 4.5: 4096 max_tokens')
+
+  // Haiku 5.5 (curated since 2026-10-12) left that shape behind: adaptive
+  // thinking + effort like the rest of the 5.x lineup, and «Av» is an
+  // explicit {type:'disabled'} — not impossible like Fable/Opus 5.5, not
+  // between_tools like Sonnet 5.5 (platform.claude.com/docs/en/models/
+  // haiku-5-5/overview, verified 2026-10-12). It has classifiers but no
+  // server-side fallback target, unlike Opus/Sonnet 5.5.
+  responder = () => anthropicSse({ model: 'claude-haiku-5-5', deltas: ['ok'] })
+  await run({ models: { anthropic: 'claude-haiku-5-5', openai: '', azure: '', mock: '' }, thinking: 'off' })
+  ok(
+    calls[0]?.body?.thinking?.type === 'disabled',
+    `haiku 5.5 off → explicit disabled (got ${JSON.stringify(calls[0]?.body?.thinking)})`
+  )
+  ok(calls[0]?.body?.fallbacks === undefined, 'haiku 5.5: no server-side fallback')
+  responder = () => anthropicSse({ model: 'claude-haiku-5-5', deltas: ['ok'] })
+  await run({ models: { anthropic: 'claude-haiku-5-5', openai: '', azure: '', mock: '' }, thinking: 'medium' })
+  ok(calls[0]?.body?.thinking?.type === 'adaptive', 'haiku 5.5 medium → adaptive thinking')
+  ok(calls[0]?.body?.output_config?.effort === 'medium', 'haiku 5.5 medium → effort travels')
 
   // A fetched capability snapshot beats the name heuristics: this id LOOKS
   // adaptive-capable to the regex fallback, but caps say no.

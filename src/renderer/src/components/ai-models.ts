@@ -85,7 +85,12 @@ export const MODELS: Record<
     // 2026-09-28; Sonnet 5 moved to "Legacy models", still served — a stored
     // Sonnet 5 selection stays pickable). Same price and context as Sonnet 5.
     { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', short: 'Sonnet 5.5', hint: 'ai.modelHintValue' },
-    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', short: 'Haiku 4.5', hint: 'ai.modelHintFast' }
+    // Haiku 5.5 replaced Haiku 4.5 in the same slot 2026-10-12 (launched
+    // 2026-10-07; Haiku 4.5 moved to Anthropic's "Legacy models" list, still
+    // served — a stored Haiku 4.5 selection stays pickable). Unlike Haiku 4.5
+    // it has adaptive thinking + the effort parameter, like the rest of the
+    // 5.x lineup, and a 1M (not 200K) context window — see ai-chat.ts.
+    { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', short: 'Haiku 5.5', hint: 'ai.modelHintFast' }
   ],
   openai: [
     // GPT-6 Astra (launched 2026-09-03) is a new top tier. GPT-6 Sol and Luna
@@ -294,6 +299,10 @@ const MODEL_CONTEXT_TOKENS: Record<string, number> = {
   // models/sonnet-5-5/overview); claude-sonnet-5 stays for stored selections
   'claude-sonnet-5-5': 1_000_000,
   'claude-sonnet-5': 1_000_000,
+  // Haiku 5.5 added 2026-10-12 (1M window, up from Haiku 4.5's 200K —
+  // platform.claude.com/docs/en/models/haiku-5-5/overview); claude-haiku-4-5
+  // stays for stored selections, like the other legacy ids above
+  'claude-haiku-5-5': 1_000_000,
   'claude-haiku-4-5': 200_000,
   // 922K is the documented INPUT capacity (1.05M total minus the 128K output
   // ceiling); 900K keeps the floor conservative without throwing the window

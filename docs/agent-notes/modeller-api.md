@@ -23,7 +23,8 @@ ikke på Opus-generasjon, så ingen kodeendring der).
 | Claude Opus 5 (legacy fra 22.9.2026, kun lagrede valg) | `claude-opus-5` | 1M | $5/$25 |
 | Claude Sonnet 5.5 | `claude-sonnet-5-5` | 1M | $2/$10 |
 | Claude Sonnet 5 (legacy fra 28.9.2026, kun lagrede valg) | `claude-sonnet-5` | 1M | $2/$10 |
-| Claude Haiku 4.5 | `claude-haiku-4-5-20251001` (alias `claude-haiku-4-5`) | 200K | $1/$5 |
+| Claude Haiku 5.5 | `claude-haiku-5-5` | 1M | From $0.10/$0.50 (tiered: $0.50/$2.50 over 100K tokens) |
+| Claude Haiku 4.5 (legacy fra 7.10.2026, kun lagrede valg) | `claude-haiku-4-5-20251001` (alias `claude-haiku-4-5`) | 200K | $1/$5 |
 
 Kontekstvinduet på 1M for Fable 5/Opus 5/Sonnet 5 sto allerede i tabellen over,
 men `MODEL_CONTEXT_TOKENS` i `ai-models.ts` hadde 200_000 (provider-gulvet) for
@@ -212,6 +213,68 @@ selve AV-mekanismen er ny og brøt oss (vurdert mot `chatAnthropic`/
   av, adaptive på, fallbacks default, moderne web-søk-verktøy). **Live
   spørsmål med ekte nøkkel gjenstår (Emil, MAINTENANCE.md rad 2).**
 
+**Ukentlig review 2026-10-12 (platform.claude.com/docs/en/models/overview,
+/models/haiku-5-5/overview og /models/haiku-5-5/whats-new-haiku-5-5, sjekket
+samme dag): Claude Haiku 5.5 (`claude-haiku-5-5`) lanserte 7.10.2026 og har
+tatt Haiku 4.5s plass i tabellen over.** Haiku 4.5 ligger nå under «Legacy
+models» — fortsatt tilgjengelig, så den beholdes i `MODEL_CONTEXT_TOKENS` for
+lagrede valg, men er ute av den kuraterte listen (samme regel som de fire
+foregående byttene). 1M kontekst (opp fra 200K), 128K output (opp fra 64K),
+tekst + bilde inn → tekst ut (kuratert-regel #2 innfridd). Samme tokenizer som
+Claude 4.7+ — samme tekst teller ca. 30 % flere tokens enn på Haiku 4.5, rent
+måleforhold, ingen kodeendring. Kunnskaps-cutoff juni 2026, pensjonering
+tidligst 7.10.2027. Default effort `medium`.
+
+Haiku 5.5 bryter helt med Haiku 4.5s tenkeform (vurdert mot `anthropicTraits`/
+`anthropicThinking` i `src/shared/ai-chat.ts`, 2026-10-12) — Haiku 4.5 tok
+ALDRI `effort` og brukte `budget_tokens` (min 1024) eller utelatelse; Haiku 5.5
+er adaptiv med `effort`-parameteren som resten av 5.x-lineupen:
+
+- **Adaptiv tenking, PÅ som default, styrt av `effort`.** Whats-new-siden:
+  «Adaptive thinking is on by default... the better way to trade response
+  quality against speed and cost is to use the effort parameter.» Ulikt
+  Fable/Opus 5.5 kan den slås av: **«you can still turn thinking off with
+  `thinking: {"type": "disabled"}` at `high` effort or below»** — rett fram
+  `disabled`, verken umulig (Fable/Opus 5.5) eller `between_tools`
+  (Sonnet 5.5). **Rettet:** regex-fallbacken (ingen live caps-data) skilte
+  tidligere ALL `haiku` fra resten; `isLegacyHaiku` er nå
+  `/haiku/i` OG IKKE `/haiku-[5-9]/i`, og `explicitOff` har fått
+  `|haiku-[5-9]` lagt til. Caps-grenen trengte ingen endring — den leser
+  `adaptiveThinking`/`budgetThinking` fra API-ets eget capability-tre, som
+  allerede ville svart riktig for en live Haiku 5.5-respons.
+- **`budget_tokens` (manuell extended thinking) er nå en 400** — «Replace
+  `budget_tokens` with adaptive thinking.» Vi sender aldri `budget_tokens`,
+  kun `thinking:{type:'adaptive'}` eller `{type:'disabled'}`. Ingen endring.
+- **Sampling-parametre (`temperature`/`top_p`/`top_k`) kan nå gi feil** — vi
+  sender ingen av dem for Anthropic i det hele tatt (grep bekreftet,
+  2026-10-12). Ingen endring.
+- **Safety-klassifikatorer er NYE for Haiku 5.5** («Safety classifiers can
+  decline a request... Server-side fallback isn't available»). Samme
+  `stop_reason === 'refusal'`-håndtering som alle andre modeller (generisk,
+  ingen modellsjekk) dekker avslaget; `hasClassifiers`
+  (`/fable|mythos|opus-5|sonnet-5-5/i`) var og er fortsatt UTEN haiku — riktig,
+  siden Anthropic selv sier fallback ikke er tilgjengelig for den. Et avslag
+  ender altså i den vanlige refusal-feilen, ikke en fallback-retry. Ingen
+  kodeendring, kommentaren ved `hasClassifiers` er utvidet til å nevne hvorfor
+  Haiku 5.5 ikke er med.
+- **Tvunget `tool_choice`/assistant-prefill/eldre `computer_20250124` gir
+  feil** — vi sender ingen av dem. Ingen endring.
+- **Thinking-blokker bundet til KONTOEN som laget dem** (ikke bare modell og
+  samtale) — «work only in the account that produced them, or in an account
+  linked to it.» Vi replayer aldri thinking-blokker uansett (historikken går
+  tilbake som ren tekst). Ingen endring.
+- **Moderne web-søk-verktøy (`web_search_20260209`), UVERIFISERT.**
+  `anthropicWebSearchTool`s `modern`-regex kjenner ikke `haiku` i det hele
+  tatt — web-search-tool-siden sier «Dynamic filtering is available with
+  Claude 4.6 and later models» uten en per-modell-tabell, og tool-reference-
+  siden peker bare tilbake til samme setning. Ikke tilstrekkelig til å safely
+  legge Haiku 5.5 til regexen uten å gjette — **åpent spørsmål, se under.**
+  Haiku 5.5 får fortsatt den eldre `web_search_20250305`, som alltid virker,
+  bare uten dynamisk filtrering.
+- Verifisert i `npm run test:ai-chat` («haiku 5.5»-assertions: disabled av,
+  adaptive medium, ingen fallback). **Live spørsmål med ekte nøkkel gjenstår
+  (Emil, MAINTENANCE.md rad 2).**
+
 Thinking-regler:
 - `budget_tokens` gir **400** på Fable/Opus 5/Sonnet 5. Bruk `thinking: {type:"adaptive"}` + `output_config: {effort: "low|medium|high|xhigh|max"}`.
 - Fable 5 og 5.1: thinking alltid på (disabled/budget → 400); `temperature` → 400; krever `client.beta.messages.stream` med `betas: ['server-side-fallback-2026-07-01']`, `fallbacks: 'default'` (Anthropic velger fallback per avslagskategori — ingen pinnet modell-id å vedlikeholde; den eldre array-formen bruker `-2026-06-01`-headeren); sjekk `stop_reason === 'refusal'` før content leses.
@@ -219,7 +282,8 @@ Thinking-regler:
 - Sonnet 5.5: thinking er PÅ som default (adaptiv, IKKE alltid-på) — men `{type:"disabled"}` er selv en 400 her. «Av» krever `{type:"between_tools"}` i stedet (godtatt på effort `high` og lavere); default effort `high`. Har klassifikatorer (ulikt Sonnet 5) → `fallbacks:'default'` + beta-klient.
 - Opus 5.5: thinking alltid på (disabled/budget → 400, ingen beta-header involvert); default effort `medium`.
 - Opus 5: thinking PÅ som default når feltet utelates — «Av» krever `{type:"disabled"}` (godtatt på effort `high` og lavere). Notatet sa «utelatt felt = av» fram til 26.9.2026; det var feil (se review 2026-09-26 over). Opus 4.8 er ikke gjensjekket.
-- Haiku 4.5: `effort` feiler; thinking via `budget_tokens` (min 1024) eller utelat.
+- Haiku 4.5 (legacy fra 7.10.2026, kun lagrede valg): `effort` feiler; thinking via `budget_tokens` (min 1024) eller utelat.
+- Haiku 5.5: thinking er PÅ som default (adaptiv) — «Av» krever `{type:"disabled"}` (godtatt på effort `high` og lavere), rett fram som Opus 5/Sonnet 5, ikke `between_tools` som Sonnet 5.5 og ikke umulig som Fable/Opus 5.5. Default effort `medium`. Har klassifikatorer, men INGEN fallback-mål («Server-side fallback isn't available») → ingen `fallbacks:'default'`, en avslått forespørsel ender i den vanlige refusal-feilen.
 - `effort` i `output_config`, GA. Hev `max_tokens` til 8–16K når thinking er på (dagens 4096 er for lite).
 - Nytt 2026-08-13: på Opus 5 og Sonnet 5 defaulter `effort` til `"high"` på Claude API/Claude Code når feltet utelates (Opus 4.8 defaulter til `high` på ALLE surfaces, inkl. claude.ai). Vi setter alltid `effort` explisitt fra tenkeinnsats-valget, så dette endrer ikke request-shapingen — bare verdt å vite hvis en fremtidig degrade-net-treff ser rar ut.
 - Å endre `thinking`-feltet invaliderer messages-cachen (dokumentblokken) → lås tenkeinnsats per samtale.
@@ -421,7 +485,8 @@ Flash.
   til Emil, gjør det ikke selv.
 - Gemini: ai.google.dev/gemini-api/docs/openai har en reasoning_effort→
   thinking_level/-budget-tabell (sjekket 13.8.2026, gjensjekket 17.8.2026,
-  24.8.2026 og 7.9.2026 — fortsatt samme fire rader), men radene heter «Gemini
+  24.8.2026, 7.9.2026 og 12.10.2026 — fortsatt samme fire rader, samme
+  mangler), men radene heter «Gemini
   3.1 Pro / 3.1 Flash-Lite / 3 Flash / 2.5» — ikke våre eksakte kuraterte
   id-er (`gemini-3.5-flash-lite` matcher ingen rad, og med byttet til
   `gemini-3.8-flash` denne runden matcher fortsatt INGEN av de tre kuraterte
@@ -506,6 +571,49 @@ Flash.
   hvorvidt de er synonyme eller et eget spor. Fortsatt utenfor kuratert-kun-
   regelen; ingen fremgang siden forrige runde utover at statusen holder seg
   stabil.
+
+  **Gjensjekket 12.10.2026** (docs.x.ai/developers/models/grok-4.20-0309-reasoning,
+  docs.x.ai/developers/model-capabilities/text/reasoning): fortsatt samme
+  status — 1M kontekst, «text, image → text» bekreftet, ingen
+  `reasoning_effort` dokumentert for `-0309-reasoning` selv. Reasoning-siden
+  nevner nå eksplisitt grok-4.7/4.6/4.5 (low/medium/high/xhigh, «reasoning
+  cannot be disabled», default `high`) men sier ingenting om `grok-4.3` eller
+  noen `grok-4.20`-id utover multi-agent-tolkningen fra 31.8.2026. Ingen
+  fremgang; fortsatt utenfor kuratert-kun-regelen.
+- **xAI Grok 4.3, effort-støtte fortsatt UVERIFISERT** (gjensjekket
+  12.10.2026, docs.x.ai/developers/model-capabilities/text/reasoning) — siden
+  dekker nå 4.5/4.6/4.7 eksplisitt men nevner aldri 4.3. Utenfor
+  `OPENAI_REASONING_RE`/`OPENAI_ALWAYS_REASONS_RE` inntil en kilde sier noe om
+  den.
+- **Haiku 5.5: moderne web-søk-verktøy (`web_search_20260209`), nytt
+  2026-10-12.** web-search-tool-siden sier bare «Dynamic filtering is
+  available with Claude 4.6 and later models» uten en per-modell-liste, og
+  tool-reference-siden («For model support, see each tool's page») sender
+  tilbake til akkurat den setningen — ingen av dem bekrefter eller avkrefter
+  Haiku-familien spesifikt. `anthropicWebSearchTool`s `modern`-regex
+  (`src/shared/ai-chat.ts`) kjenner ikke `haiku` fra før (begrunnelse i koden:
+  «Haiku and older models only accept the basic variant», aldri sjekket mot en
+  kilde som nevner Haiku 5.5 ved navn). Haiku 5.5 bruker derfor fortsatt
+  `web_search_20250305` her — virker, bare uten dynamisk filtrering. Sjekk
+  Models API-feltet `capabilities.server_tools.web_search.supported` mot en
+  ekte Haiku 5.5-respons ved neste anledning (Emil, med nøkkel) i stedet for å
+  gjette fra en generisk policy-setning.
+- **Mistral Large 4, nytt 6.10.2026, IKKE kuratert.** docs.mistral.ai/
+  getting-started/models (sjekket 12.10.2026) lister `mistral-large-4-0`
+  øverst i generalist-gruppen, «Public Preview»; en egen model-card-side
+  (slug `mistral-large-4-0` i noen lenker, «mistral-large-4+1» i selve
+  sideteksten — API-ID-en er altså TVETYDIG på denne kilden alene, nøyaktig
+  den fellen 12.8-runden gikk i med URL-slugs vs. ekte `/v1/models`-id-er, se
+  review 2026-10-05 over) oppgir 1M kontekst og en «1.6B vision encoder» —
+  altså trolig bilde-input, men siden sier ikke eksplisitt at output er KUN
+  tekst, og `reasoning_effort` er udokumentert (et reasoning-ikon uten
+  verdiliste). Mistral Large 3 ble dominert av Medium 3.5 og endte utenfor
+  kuratert-kun-regelen fordi den var blind for bilder (se review 2026-10-05)
+  — samme bildesjekk MÅ gjøres for Large 4 før den kan vurderes, og det
+  krever enten en bekreftet API-id fra `/v1/models` eller en direkte sonde med
+  nøkkel. Ikke gjort her (ingen nøkkel i miljøet). La den stå som åpent
+  spørsmål; ikke gjett API-id-en og ikke anta bilde-støtte fra «vision
+  encoder»-ordlyden alene.
 
 Ukentlig review 2026-09-07 (platform.claude.com/docs/en/models/overview,
 developers.openai.com/api/docs/models, ai.google.dev/gemini-api/docs/models,
@@ -676,6 +784,50 @@ dekker Anthropic/OpenAI/Gemini/xAI/Groq, som Mistral-runden over hoppet over):
   (`input_modalities`/`output_modalities`/`created`/`pricing.completion`)
   intakte.
 
+Ukentlig review 2026-10-12 (platform.claude.com/docs/en/models/overview,
+/models/haiku-5-5/overview, /models/haiku-5-5/whats-new-haiku-5-5,
+developers.openai.com/api/docs/models, /api/docs/models/gpt-6-sol,
+/api/docs/deprecations, ai.google.dev/gemini-api/docs/models,
+ai.google.dev/gemini-api/docs/openai, docs.x.ai/developers/models,
+/developers/model-capabilities/text/reasoning,
+/developers/models/grok-4.20-0309-reasoning, docs.mistral.ai/getting-started/
+models, /models/model-cards/mistral-large-4-0, console.groq.com/docs/models,
+alle sjekket samme dag):
+
+- **Anthropic — DRIFT:** Haiku 5.5 erstatter Haiku 4.5 (se § Anthropic, review
+  2026-10-12, over — ny request-form, ikke bare et bytte av id: adaptiv
+  thinking + effort i stedet for Haiku 4.5s `budget_tokens`/utelatt felt).
+  Fable 5.1/Opus 5.5/Sonnet 5.5 uendret.
+- **OpenAI:** `gpt-6-sol` fryktet pensjonert da den falt ut av modellsidens
+  «flagship»-tabell (som nå bare viser Astra/6.1 Sol/Luna) — **falsk alarm**:
+  modellsiden for `gpt-6-sol` selv svarer 200 og er uendret (samme kontekst,
+  pris, reasoning-verdier som 29.9-runden), og `/api/docs/deprecations`
+  nevner den bare som ANNENS erstatning (`gpt-5.3-codex`, `gpt-5.1`), ikke som
+  pensjonert selv. Ingen endring — notert fordi «forsvant fra en tabell» og
+  «pensjonert» ikke er det samme, og neste review bør sjekke modellsiden
+  direkte, ikke bare flaggskip-oversikten, før den konkluderer. Astra, 6.1
+  Sol, Luna og 5.6 Terra uendret.
+- **Gemini:** `gemini-3.1-pro-preview` (fortsatt Preview), `gemini-3.8-flash`
+  og `gemini-3.5-flash-lite` uendret. Ingen «Gemini 3.5 Pro»-GA observert
+  fortsatt. reasoning_effort-mappingen (åpent spørsmål) fortsatt uendret, se
+  under.
+- **xAI:** `grok-4.7`/`grok-4.3` uendret (reasoning-siden bekrefter nå
+  eksplisitt 4.5/4.6/4.7s low/medium/high/xhigh og «reasoning cannot be
+  disabled», men nevner aldri 4.3 — se nytt åpent spørsmål under). Grok 4.20
+  fortsatt IKKE lagt til, gjensjekket, ingen fremgang (se under).
+- **Mistral — nytt funn, IKKE kuratert:** Mistral Large 4
+  (`mistral-large-4-0`, Public Preview, lansert 6.10.2026) dukket opp øverst
+  på modell-oversikten. API-id tvetydig på kilden alene, bilde-input
+  sannsynlig («1.6B vision encoder») men ikke bekreftet, `reasoning_effort`
+  udokumentert — se nytt åpent spørsmål under. De tre kuraterte id-ene
+  (`mistral-medium-2604`, `ministral-14b-2512`) uendret.
+- **Groq:** `openai/gpt-oss-120b`/`-20b` uendret, fortsatt Production-tier,
+  131K kontekst som i koden. Ingen nye lanseringer eller pensjoneringer utover
+  det `/docs/deprecations` allerede viste.
+- `npm run check:models` (keyless): ingen statisk drift; OpenRouter-probe 458
+  modeller, alle felt (`input_modalities`/`output_modalities`/`created`/
+  `pricing.completion`) intakte.
+
 ## Standardmodeller og fallback (Emil, 27.9.2026)
 
 - **Standard:** `claude-opus-5-5` for Anthropic og `gpt-6-sol` for OpenAI
@@ -700,7 +852,11 @@ dekker Anthropic/OpenAI/Gemini/xAI/Groq, som Mistral-runden over hoppet over):
   ingenting, mens fallback gir svar fra modellen Anthropic anbefaler for den
   kategorien. En kategori uten anbefalt fallback ender fortsatt i avslaget.
   Sonnet 5 (IKKE 5.5) og Haiku 4.5 har ingen klassifikatorer og får ingen
-  fallback.
+  fallback. **Haiku 5.5 er et tredje tilfelle** (lagt til 2026-10-12, se §
+  Anthropic): den FÅR klassifikatorer («Safety classifiers can decline a
+  request», whats-new-haiku-5-5), men Anthropics egen side sier «Server-side
+  fallback isn't available» for den — så den er bevisst utenfor
+  `hasClassifiers` selv om den avslår som de andre.
 - **Svaret sier hvem som svarte.** Et svar fra fallback-modellen bærer en
   `fallback`-innholdsblokk (`{from:{model}, to:{model}}`, «What the response
   contains» på samme side); `chatAnthropic` leser `to.model` fra siste blokk
@@ -725,19 +881,22 @@ dekker Anthropic/OpenAI/Gemini/xAI/Groq, som Mistral-runden over hoppet over):
 
 ## Anbefalt mapping «Tenkeinnsats» (Av/Lav/Middels/Høy)
 
-| Valg | Opus 5 / Sonnet 5 | Fable 5 / 5.1, Opus 5.5 | Sonnet 5.5 | Haiku 4.5 | gpt-5.6, GPT-6 Sol/Luna | GPT-6 Astra, GPT-6.1 Sol, grok 4.5–4.7, gpt-oss | Mistral Medium 3.5 / Small 4 |
+| Valg | Opus 5 / Sonnet 5 / Haiku 5.5 | Fable 5 / 5.1, Opus 5.5 | Sonnet 5.5 | Haiku 4.5 (legacy) | gpt-5.6, GPT-6 Sol/Luna | GPT-6 Astra, GPT-6.1 Sol, grok 4.5–4.7, gpt-oss | Mistral Medium 3.5 / Small 4 |
 |---|---|---|---|---|---|---|---|
 | Av | `{type:"disabled"}` | umulig (→ effort low) | `{type:"between_tools"}` | utelat | `none` | umulig (→ `low`) | `none` |
 | Lav/Middels/Høy | `adaptive` + effort low/medium/high | effort low/medium/high | `adaptive` + effort low/medium/high | ikke støttet (utelat) | low/medium/high | low/medium/high | `high` (eneste på-verdi) |
 
 Defaults: anthropic `claude-opus-5-5` + Middels; openai `gpt-6-sol` + medium
 (fra 27.9.2026; var `claude-sonnet-5` og `gpt-5.6-terra`).
-Heuristikk: effort kun når id ikke matcher `haiku` (fallback i `anthropicTraits`
-skiller ikke videre på Opus/Sonnet/Fable-generasjon — «alwaysThinks» slår bare
-inn for `fable|mythos|opus-5-5`, og explicit-off for `sonnet-[5-9]|opus-[5-9]`,
+Heuristikk: effort kun når id matcher `haiku-[5-9]` ELLER ikke matcher `haiku`
+i det hele tatt (fallback i `anthropicTraits` skiller ikke videre på
+Opus/Sonnet/Fable-generasjon — «alwaysThinks» slår bare inn for
+`fable|mythos|opus-5-5`, og explicit-off for `sonnet-[5-9]|opus-[5-9]|haiku-[5-9]`,
 som Sonnet 5.5 også treffer; den AV-mekanismen («disabled» vs «between_tools»)
-avgjøres separat av en egen `betweenToolsOff`-sjekk, `/sonnet-5-5/i`); Haiku
-alltid uten thinking. OpenAI-stil: `reasoning_effort` sendes for
+avgjøres separat av en egen `betweenToolsOff`-sjekk, `/sonnet-5-5/i`, som Haiku
+5.5 ikke treffer — den får plain `disabled` som Opus 5/Sonnet 5). Haiku 4.5 og
+eldre (`isLegacyHaiku`, `/haiku/i` uten `haiku-[5-9]`) alltid uten thinking.
+OpenAI-stil: `reasoning_effort` sendes for
 `OPENAI_REASONING_RE` (`gpt-[5-9]|o[0-9]|grok-4.[5-7]|gpt-oss`), og «Av» blir
 `low` i stedet for `none` for `OPENAI_ALWAYS_REASONS_RE`
 (`gpt-6-astra|gpt-6\.1-sol|grok-4.[5-7]|gpt-oss`). Mistral: `MISTRAL_REASONING_RE`
