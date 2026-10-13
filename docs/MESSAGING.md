@@ -250,8 +250,8 @@ call, and the app is offline unless you ask. Shaped on 2026-10-13 (v0.61.1–3):
 a citation shows ONLY its entry, a figure a page window with a thin scrollbar
 and a corner grip, the abstract under the whole entry with its own cross; a
 sideways page is measured through its own transform. Its own section on Emil's
-ask the same day. No picture of its own yet — a frame would need a shot in
-`scripts/shoot-screenshots.mjs` and his judgement.)*
+ask the same day; its frame `link_preview` (a citation with the abstract
+unfolded, page 2) shot and approved the same evening.)*
 
 ### 2. Split view
 

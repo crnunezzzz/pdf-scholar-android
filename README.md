@@ -202,6 +202,8 @@ Sepia cream); Night and Night+ are the two dark modes, the second with higher co
 
 ### Previews where you read
 
+![A citation previewed where it is cited — the reference entry beside the text, the abstract under it](docs/screenshots/link_preview.png)
+
 Rest the pointer on a citation, a figure, a table or an equation reference and a preview
 of what it points to opens beside the text, without moving the page (long-press on a
 touchscreen). A citation shows its reference entry, and only that; a citation written as

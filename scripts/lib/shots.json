@@ -57,6 +57,7 @@
     "search": { "ships": [] },
     "search_ai": { "ships": ["readme", "landing"] },
     "shortcuts": { "ships": ["readme", "landing"] },
+    "link_preview": { "ships": ["readme", "landing"] },
     "dual-pane": { "ships": ["readme", "landing", "store"] },
     "assistant": { "ships": ["readme", "landing", "store"] },
     "assistant_snip": { "ships": ["readme"] },
