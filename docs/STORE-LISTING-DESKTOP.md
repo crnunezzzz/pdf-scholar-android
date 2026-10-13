@@ -150,28 +150,28 @@ Kildekode: https://github.com/emilmsh/pdf-scholar
 
 ---
 
-## What's new in this version (≤ 1 500 chars) — v0.60.2
+## What's new in this version (≤ 1 500 chars) — v0.61.0
 
 **EN:**
 ```
-• Rest the pointer on a citation, a figure or an equation to preview it beside the text. On a citation, one click fetches the cited paper's abstract from free scholarly databases — no key, no account. In the reference list, select an entry and choose «Abstract»
-• Recent files can be shown as a grid of their first pages with how far you read; pin the ones you return to, remove the rest
-• Page by page: one page or one spread at a time, turned by the wheel, a swipe or the arrow keys
-• Tabs can be pinned, and each window gets its tabs back at the next launch
-• PDF files get a document icon of their own in Explorer, or one you choose
-• Night has a new paper tone, «White»: the document as printed inside the dark toolbar and panels
-• The selection menu can wait for a right-click instead of opening on its own, and has a compact form
+• A document that changes on disk — a LaTeX build, a sync client, another program's save — is reloaded in place; with unsaved marks you are offered the reload instead
+• The interface in Simplified Chinese
+• Link previews read the page at a scale of their own, scroll both ways and zoom with Ctrl+wheel; a citation like «5–9» shows every entry in the range; math in abstracts is rendered
+• Search finds a phrase across a line break
+• «Create bookmark» in the selection menu names the bookmark after the selected text
+• A note you have typed into is saved when you leave it, like a comment on a highlight
+• The AI settings name «Other OpenAI-compatible endpoint» as its own choice, and the quick-answer bubble grows with its window
 ```
 
 **NO:**
 ```
-• Hold pekeren over en henvisning, en figur eller en ligning for å forhåndsvise den ved siden av teksten. På en henvisning henter ett klikk sammendraget til den siterte artikkelen fra åpne fagdatabaser – uten nøkkel og konto. I referanselista: merk en oppføring og velg «Sammendrag»
-• Nylige filer kan vises som et rutenett av forsider med hvor langt du har lest; fest de du kommer tilbake til, fjern resten
-• Side for side: én side eller ett oppslag om gangen, bladd med hjulet, et sveip eller piltastene
-• Faner kan festes, og hvert vindu får fanene sine tilbake ved neste oppstart
-• PDF-filer får et eget dokumentikon i Utforsker, eller et du velger selv
-• Natt har fått en ny papirtone, «Hvitt»: dokumentet som trykt inne i mørk verktøylinje og mørke paneler
-• Markeringsmenyen kan vente på høyreklikk i stedet for å åpne selv, og har en kompakt form
+• Et dokument som endres på disk – en LaTeX-bygging, en synkklient, et annet programs lagring – lastes inn på nytt på stedet; med ulagrede merker får du tilbud om det i stedet
+• Grensesnittet på forenklet kinesisk
+• Lenkeforhåndsvisningen leser siden i sin egen skala, ruller begge veier og zoomer med Ctrl+hjul; en henvisning som «5–9» viser alle oppføringene; matematikk i sammendrag gjengis
+• Søk finner en frase over et linjeskift
+• «Lag bokmerke» i markeringsmenyen gir bokmerket navn etter den markerte teksten
+• Et notat du har skrevet i, lagres når du forlater det, som en kommentar på en markering
+• KI-innstillingene har «Annet OpenAI-kompatibelt endepunkt» som eget valg, og hurtigsvar-boblen vokser med vinduet sitt
 ```
 
 ---
