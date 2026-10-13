@@ -35,7 +35,7 @@ export interface ThemeTune {
 }
 
 /** UI language — 'auto' follows the OS/browser language */
-export type LanguagePreference = 'nb' | 'en' | 'auto'
+export type LanguagePreference = 'nb' | 'en' | 'zh' | 'auto'
 
 export interface Settings {
   theme: ThemePreference
@@ -1070,6 +1070,13 @@ export interface PdfxApi {
    *  Without it those windows would keep offering to save nothing, and after a
    *  discard would keep showing marks the document no longer has. */
   onDraftEndedElsewhere(cb: (path: string) => void): () => void
+  /** Fires when `path`'s bytes changed on disk through something other than
+   *  this app — a LaTeX build, a sync client, another program's save (issue
+   *  #41). main watches every open document's folder, waits for the write to
+   *  finish and ignores its own saves; the receiver decides whether to reload
+   *  (App.tsx: a clean tab reloads in place, a tab with unsaved marks is
+   *  offered to). Desktop only — a browser has no file watcher (PLATFORMS.md). */
+  onFileChangedOnDisk(cb: (path: string) => void): () => void
   /** Open the system print dialog for the PDF file */
   printFile(path: string): Promise<{ ok: true } | FileError>
   /** Save exported content (text, or bytes for binary formats like .docx) via

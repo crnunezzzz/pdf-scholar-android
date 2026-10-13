@@ -430,6 +430,7 @@ const LANGUAGES: { id: LanguagePreference; label: string }[] = [
   // Language names stay in their own language — standard for language pickers
   { id: 'nb', label: 'Norsk' },
   { id: 'en', label: 'English' },
+  { id: 'zh', label: '中文（简体）' },
   { id: 'auto', label: 'Auto' }
 ]
 

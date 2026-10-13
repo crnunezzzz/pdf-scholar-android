@@ -328,7 +328,7 @@ export function AiQuickPopover({ state, onSendToChat, onCitation, onClose }: Qui
 
   return (
     <div
-      className="ai-quick"
+      className={`ai-quick${quickSize ? ' is-sized' : ''}`}
       ref={popRef}
       style={{
         ...(pos ?? { left: state.x, top: state.y, visibility: 'hidden' }),

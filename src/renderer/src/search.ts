@@ -83,22 +83,39 @@ function isWholeWord(text: string, start: number, end: number): boolean {
   return !(before && WORD_CHAR.test(before)) && !(after && WORD_CHAR.test(after))
 }
 
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** The query as a pattern over a page's text. Every whitespace run in the
+ *  query matches ANY whitespace run on the page, so a phrase the page breaks
+ *  across a line — «originated» + '\n' + «in», the '\n' buildPageText writes
+ *  after an item with hasEOL — is still one match (issue #38: «The tree
+ *  originated in» found nothing while «The tree originated» did). Leading and
+ *  trailing blanks are dropped: a reader who has typed «originated » is on the
+ *  way to the next word, not asking for a space. Null for a blank query. */
+export function queryPattern(query: string, matchCase: boolean): RegExp | null {
+  const words = query.trim().split(/\s+/)
+  if (words.length === 0 || words[0] === '') return null
+  return new RegExp(words.map(escapeRe).join('\\s+'), matchCase ? 'g' : 'gi')
+}
+
 export function findMatches(
   pages: PageText[],
   query: string,
   opts: SearchOptions
 ): SearchMatch[] {
   const matches: SearchMatch[] = []
-  const needle = opts.matchCase ? query : query.toLowerCase()
-  if (!needle) return matches
+  const re = queryPattern(query, opts.matchCase)
+  if (!re) return matches
   for (let p = 0; p < pages.length; p++) {
-    const haystack = opts.matchCase ? pages[p].text : pages[p].text.toLowerCase()
+    const haystack = pages[p].text
     let from = 0
     while (matches.length < MAX_MATCHES) {
-      const at = haystack.indexOf(needle, from)
-      if (at === -1) break
+      re.lastIndex = from
+      const m = re.exec(haystack)
+      if (!m) break
+      const at = m.index
       from = at + 1
-      const end = at + needle.length
+      const end = at + m[0].length
       if (opts.wholeWords && !isWholeWord(pages[p].text, at, end)) continue
       const snippetStart = Math.max(0, at - 32)
       const snippetEnd = Math.min(pages[p].text.length, end + 42)

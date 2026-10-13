@@ -7,11 +7,15 @@
 // Keys never reach this component: it posts plaintext to the main process once
 // on save and reads back only `hasKey` flags. Keep it that way — no key value
 // may be held in renderer state beyond the field the user is typing into.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AiAccessMode, AiConfigView, AiProviderId, FileError } from '../../../shared/types'
 import { bridge } from '../bridge'
 import { errorText, t, useLang } from '../i18n'
 import { DEFAULT_AZURE_API_VERSION } from '../../../shared/defaults'
+
+/** The compat service menu's row for a URL that is no preset: a marker for
+ *  the select, never stored */
+const CUSTOM_ENDPOINT = 'custom'
 import {
   compatPresets,
   DEFAULT_MODELS,
@@ -49,6 +53,7 @@ export function AiSettings({ config, onSaved, onClose }: SettingsProps): React.J
   const [deployment, setDeployment] = useState(config.azure.deployment)
   const [apiVersion, setApiVersion] = useState(config.azure.apiVersion)
   const [compatUrl, setCompatUrl] = useState(config.compat.baseUrl)
+  const compatUrlRef = useRef<HTMLInputElement>(null)
   const [compatModel, setCompatModel] = useState(config.models.compat)
   const [access, setAccess] = useState<AiAccessMode>(config.access)
   const [saving, setSaving] = useState(false)
@@ -339,9 +344,21 @@ export function AiSettings({ config, onSaved, onClose }: SettingsProps): React.J
                 {/* Prefills the URL field, nothing more — the field below stays
                     the single source of truth and is freely editable */}
                 <select
-                  value={compatPresets().find((p) => p.url === compatUrl.trim())?.url ?? ''}
+                  value={
+                    compatPresets().find((p) => p.url === compatUrl.trim())?.url ??
+                    (compatUrl.trim() ? CUSTOM_ENDPOINT : '')
+                  }
                   onChange={(e) => {
-                    if (e.target.value) setCompatUrl(e.target.value)
+                    // «Annet endepunkt» is a named row for the URL field
+                    // itself (issue #35: the hint promised «or type your
+                    // own», and a select cannot be typed into — readers
+                    // found the field only by leaving the row unpicked).
+                    // Picking it frees the field from a preset's URL and
+                    // puts the cursor there.
+                    if (e.target.value === CUSTOM_ENDPOINT) {
+                      if (compatPresets().some((p) => p.url === compatUrl.trim())) setCompatUrl('')
+                      compatUrlRef.current?.focus()
+                    } else if (e.target.value) setCompatUrl(e.target.value)
                   }}
                 >
                   <option value="">{t('ai.compatPresetPick')}</option>
@@ -350,13 +367,15 @@ export function AiSettings({ config, onSaved, onClose }: SettingsProps): React.J
                       {p.label}
                     </option>
                   ))}
+                  <option value={CUSTOM_ENDPOINT}>{t('ai.compatCustom')}</option>
                 </select>
               </label>
               <label className="ai-field">
                 <span>{t('ai.baseUrl')}</span>
                 <input
+                  ref={compatUrlRef}
                   value={compatUrl}
-                  placeholder="http://localhost:11434/v1"
+                  placeholder="https://example.com/v1"
                   onChange={(e) => setCompatUrl(e.target.value)}
                   spellCheck={false}
                 />

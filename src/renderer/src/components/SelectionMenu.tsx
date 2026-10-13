@@ -18,6 +18,7 @@ import {
   IconBook,
   IconComment,
   IconCopy,
+  IconBookmark,
   IconGlobe,
   IconImageGrab,
   IconMarkupHighlight,
@@ -213,6 +214,7 @@ export type MenuAction =
   | { kind: 'squiggly'; color: HighlightColor }
   | { kind: 'note' }
   | { kind: 'comment' }
+  | { kind: 'bookmark' }
   | { kind: 'copy' }
   | { kind: 'search' }
   | { kind: 'dictionary' }
@@ -404,6 +406,11 @@ export function SelectionMenu({ menu, onAction, aiEnabled, compact = false }: Me
           <button className="compact-btn" title={t('menu.note')} onClick={() => onAction({ kind: 'note' })}>
             <IconNote size={16} />
           </button>
+          {!menu.foreign && (
+            <button className="compact-btn" title={t('menu.bookmarkTip')} onClick={() => onAction({ kind: 'bookmark' })}>
+              <IconBookmark size={16} />
+            </button>
+          )}
           <button className="compact-btn" title={t('menu.copy')} onClick={() => onAction({ kind: 'copy' })}>
             <IconCopy size={16} />
           </button>
@@ -482,6 +489,14 @@ export function SelectionMenu({ menu, onAction, aiEnabled, compact = false }: Me
           <button className="menu-item" onClick={() => onAction({ kind: 'note' })}>
             <span className="menu-icon"><IconNote size={15} /></span> {t('menu.note')}
           </button>
+          {/* A bookmark named by the selected text (issue #39). Bookmarks
+              belong to the tab's own file, so the split column's other
+              document offers none. */}
+          {!menu.foreign && (
+            <button className="menu-item" title={t('menu.bookmarkTip')} onClick={() => onAction({ kind: 'bookmark' })}>
+              <span className="menu-icon"><IconBookmark size={15} /></span> {t('menu.bookmark')}
+            </button>
+          )}
           <button className="menu-item" onClick={() => onAction({ kind: 'copy' })}>
             <span className="menu-icon"><IconCopy size={15} /></span> {t('menu.copy')}
           </button>
@@ -547,14 +562,41 @@ interface NoteProps {
   /** Markup rect (viewport coords) to open clear of, so it stays readable.
    *  Forwarded from an optional field on the note draft — see AnnotPopover. */
   avoid?: { top: number; bottom: number; left: number } | null | undefined
+  /** Save and close: the Lagre button, Ctrl+Enter */
   onSave(text: string): void
+  /** The draft is going away with text in it (a second note started, the tab
+   *  closed): persist what was typed, without touching the draft state. */
+  onFlush(text: string): void
   onCancel(): void
 }
 
-export function NotePopover({ x, y, avoid, onSave, onCancel }: NoteProps): React.JSX.Element {
+export function NotePopover({ x, y, avoid, onSave, onFlush, onCancel }: NoteProps): React.JSX.Element {
   useLang()
   const [text, setText] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
+  // Closing must never lose a typed note. The comment popover on a mark saves
+  // on its way out; a note typed and then left — a second note started
+  // elsewhere, the tab closed — went with the draft (issue #34: the two read
+  // as the same bubble and behaved differently). So the text is handed up on
+  // unmount too, unless the reader chose Avbryt/Esc or already saved.
+  const doneRef = useRef(false)
+  const flushRef = useRef({ text, onFlush })
+  flushRef.current = { text, onFlush }
+  useEffect(
+    () => () => {
+      const { text: latest, onFlush: flush } = flushRef.current
+      if (!doneRef.current && latest.trim()) flush(latest.trim())
+    },
+    []
+  )
+  const cancel = (): void => {
+    doneRef.current = true
+    onCancel()
+  }
+  const save = (): void => {
+    doneRef.current = true
+    onSave(text.trim())
+  }
   // Opens clear of the markup (below/above it) so the marked text stays
   // readable; draggable from its chrome (the textarea keeps its own pointer).
   const { ref, style, positioned, handleProps } = useDraggable(x, y + 10, [], avoid)
@@ -595,16 +637,16 @@ export function NotePopover({ x, y, avoid, onSave, onCancel }: NoteProps): React
         onPointerDown={(e) => e.stopPropagation()}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && text.trim()) onSave(text.trim())
-          if (e.key === 'Escape') onCancel()
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && text.trim()) save()
+          if (e.key === 'Escape') cancel()
           e.stopPropagation()
         }}
       />
       <div className="note-actions" onPointerDown={(e) => e.stopPropagation()}>
-        <button className="btn-secondary" onClick={onCancel}>
+        <button className="btn-secondary" onClick={cancel}>
           {t('app.cancel')}
         </button>
-        <button className="btn-primary" disabled={!text.trim()} onClick={() => onSave(text.trim())}>
+        <button className="btn-primary" disabled={!text.trim()} onClick={save}>
           {t('app.save')}
         </button>
       </div>

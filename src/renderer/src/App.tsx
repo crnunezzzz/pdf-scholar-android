@@ -42,6 +42,9 @@ interface OpenTab {
   /** Pinned (issue #29): kept at the strip's start, no close cross, and back
    *  at every launch whatever restoreSession says */
   pinned: boolean
+  /** The file changed on disk while this tab holds unsaved marks (issue #41):
+   *  a bar offers the reload, the marks stay until the reader decides */
+  staleOnDisk?: boolean
   /** Restored from the last session and not shown yet (issue #29): `payload`
    *  holds the path and name but no bytes, no viewer is mounted, and main has
    *  not been told the document is open. The first time the tab is shown its
@@ -147,11 +150,13 @@ export default function App(): React.JSX.Element {
    *  from the library. */
   const [themeToast, setThemeToast] = useState<string | null>(null)
   const themeToastTimerRef = useRef<number | null>(null)
-  const flashThemeName = useCallback((name: string) => {
-    setThemeToast(name)
+  /** The same pill for any one-line app-level notice */
+  const flashNotice = useCallback((text: string, ms: number) => {
+    setThemeToast(text)
     if (themeToastTimerRef.current) window.clearTimeout(themeToastTimerRef.current)
-    themeToastTimerRef.current = window.setTimeout(() => setThemeToast(null), 1400)
+    themeToastTimerRef.current = window.setTimeout(() => setThemeToast(null), ms)
   }, [])
+  const flashThemeName = useCallback((name: string) => flashNotice(name, 1400), [flashNotice])
   useEffect(
     () => () => {
       if (themeToastTimerRef.current) window.clearTimeout(themeToastTimerRef.current)
@@ -820,6 +825,66 @@ export default function App(): React.JSX.Element {
     [setTabDirty, confirmCloseVerdict, reportCloseFailure, goToTab]
   )
 
+  // ---------- Files changing on disk (issue #41) ----------
+  //
+  // main watches every open document's folder and says when the file's bytes
+  // changed under us (a LaTeX build, a sync client, another program's save).
+  // A tab without unsaved marks reloads where it stands, with a word about it;
+  // a tab with unsaved marks gets a bar instead — its marks are the reader's
+  // and go nowhere until they decide (the same copy/discard choice as
+  // re-opening the path from Explorer). A tab restored but never shown reads
+  // fresh bytes when it is shown, so it needs nothing. The browser preview and
+  // the extension have no file watcher: there a path is re-opened by hand.
+  const reloadFromDisk = useCallback(
+    async (id: string, path: string, quiet: boolean) => {
+      const result = await bridge.readFile(path)
+      if ('error' in result) {
+        // Still being written, or gone: keep the old bytes and offer the bar,
+        // so the reader can try again rather than lose the page they were on
+        setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, staleOnDisk: true } : t)))
+        return
+      }
+      const initialPosition = await bridge.getPosition(path)
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? { ...t, payload: result, initialPosition, epoch: t.epoch + 1, staleOnDisk: false }
+            : t
+        )
+      )
+      if (quiet) flashNotice(t('app.reloadedFromDisk', { name: result.name }), 2600)
+    },
+    [flashNotice]
+  )
+  const onFileChangedOnDisk = useCallback(
+    (path: string) => {
+      const tab = tabsRef.current.find((t) => t.payload.path === path)
+      if (!tab || tab.lazy) return
+      if (dirtyTabsRef.current.has(tab.id)) {
+        setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, staleOnDisk: true } : t)))
+        return
+      }
+      void reloadFromDisk(tab.id, path, true)
+    },
+    [reloadFromDisk]
+  )
+  useEffect(() => bridge.onFileChangedOnDisk(onFileChangedOnDisk), [onFileChangedOnDisk])
+  /** The bar's «Last inn på nytt» on a tab holding unsaved marks */
+  const reloadStaleTab = useCallback(
+    async (id: string) => {
+      const tab = tabsRef.current.find((t) => t.id === id)
+      if (!tab) return
+      if (dirtyTabsRef.current.has(id)) {
+        const verdict = await confirmExternalUpdateVerdict(tab.payload.path, tab.payload.name)
+        if (verdict === 'cancel') return
+        await discardDraft(tab.payload.path)
+        setTabDirty(id, false)
+      }
+      await reloadFromDisk(id, tab.payload.path, false)
+    },
+    [confirmExternalUpdateVerdict, setTabDirty, reloadFromDisk]
+  )
+
   /** «Save a copy» semantics: continue working in the copy. The edits were
    *  just flushed INTO the new file, so swap this tab over to it (the viewer
    *  remounts on the fresh bytes) and silently drop the original's draft —
@@ -1289,6 +1354,24 @@ export default function App(): React.JSX.Element {
           }
           return (
             <div key={`${tab.id}:${tab.epoch}`} className={`tab-view${showing ? ' active' : ''}`}>
+              {tab.staleOnDisk && (
+                <div className="disk-change-bar" role="status">
+                  <span>{t('app.changedOnDisk', { name: tab.payload.name })}</span>
+                  <button className="btn-primary" onClick={() => void reloadStaleTab(tab.id)}>
+                    {t('app.reloadFromDisk')}
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() =>
+                      setTabs((prev) =>
+                        prev.map((x) => (x.id === tab.id ? { ...x, staleOnDisk: false } : x))
+                      )
+                    }
+                  >
+                    {t('app.keepMine')}
+                  </button>
+                </div>
+              )}
               <PdfViewer
                 payload={tab.payload}
                 initialPosition={tab.initialPosition}

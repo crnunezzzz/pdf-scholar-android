@@ -384,6 +384,25 @@ button {
   visibility: visible;
 }
 
+/* The file changed on disk under a tab holding unsaved marks (issue #41): a
+   bar above the pages, not a modal — the reader decides when */
+.disk-change-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.disk-change-bar span {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ---------- Error banner ---------- */
 
 .error-banner {
@@ -5800,6 +5819,14 @@ html.pen-near .draw-layer {
   /* Column-flex child: without this the body wins over the popover's
      max-height and pushes the actions row offscreen */
   min-height: 0;
+}
+
+/* Dragged larger by the grip: the body takes the room. Capped at 240 px it
+   stopped growing while the popover went on, leaving a blank band under the
+   actions row (issue #37). */
+.ai-quick.is-sized .ai-quick-body {
+  max-height: none;
+  flex: 1 1 auto;
 }
 
 /* Figure mode: the snipped region, pinned between head and the scrolling

@@ -62,6 +62,9 @@ jobs:
       # re-read, landed session records elsewhere flipped to file-painted so
       # the swapped pdf.js document does not paint them a second time
       - run: npm run test:doc-load
+      # The search query rule: a phrase the page breaks across a line is one
+      # match (every whitespace run in the query matches any on the page)
+      - run: npm run test:search
       # BM25 excerpt fallback for documents beyond the model's context window:
       # budget bounds, real-page markers, char→quote citation conversion
       - run: npm run test:retrieval

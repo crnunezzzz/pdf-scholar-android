@@ -1,8 +1,11 @@
-// Tiny hand-rolled i18n: flat key → string dictionaries for bokmål and
-// English, a module-level store, and a hook so components re-render on
-// language change (several components are memoized — prop cascades are not
-// enough). Non-React modules (exports, prompts) call t() at use time.
+// Tiny hand-rolled i18n: flat key → string dictionaries for bokmål, English
+// and Simplified Chinese (i18n-zh.ts), a module-level store, and a hook so
+// components re-render on language change (several components are memoized —
+// prop cascades are not enough). Non-React modules (exports, prompts) call
+// t() at use time. `nb` is the master: `Dict` is its key set, so a string
+// added here without its English and Chinese lines fails typecheck.
 import { useSyncExternalStore } from 'react'
+import { zh } from './i18n-zh'
 
 import type {
   AiErrorCode,
@@ -15,7 +18,7 @@ import type {
 } from '../../shared/types'
 import type { FileIconErrorCode } from '../../shared/file-icon'
 
-export type Lang = 'nb' | 'en'
+export type Lang = 'nb' | 'en' | 'zh'
 /** User's choice — 'auto' follows the OS/browser language */
 export type LanguagePreference = Lang | 'auto'
 
@@ -35,6 +38,10 @@ const nb = {
   'app.back': 'Tilbake',
   'app.pageAbbrev': 's.',
   'app.openFailed': 'Kunne ikke åpne filen: {error}',
+  'app.changedOnDisk': '«{name}» er endret på disk. Versjonen som vises, har ulagrede merker.',
+  'app.reloadFromDisk': 'Last inn på nytt …',
+  'app.keepMine': 'Behold min versjon',
+  'app.reloadedFromDisk': '«{name}» ble endret på disk og er lastet inn på nytt',
   // Shown by the render-error boundary — the only screen a user sees when the
   // UI itself failed, so it has to say what to do next.
   'crash.title': 'Noe gikk galt',
@@ -584,6 +591,8 @@ const nb = {
   'menu.customColor': 'Velg farge …',
   'menu.aiSection': 'Assistent',
   'menu.note': 'Notat',
+  'menu.bookmark': 'Lag bokmerke',
+  'menu.bookmarkTip': 'Bokmerk denne siden med den markerte teksten som navn',
   'menu.comment': 'Kommenter',
   'menu.copy': 'Kopier',
   'menu.cut': 'Klipp ut',
@@ -667,6 +676,7 @@ const nb = {
   'side.bookmarkRename': 'Gi nytt navn (dobbeltklikk raden)',
   'side.bookmarkDelete': 'Fjern bokmerket',
   'viewer.bookmarkAdded': 'Side {page} bokmerket',
+  'viewer.bookmarkRenamed': 'Bokmerket på side {page} fikk nytt navn',
   'viewer.bookmarkRemoved': 'Bokmerket på side {page} er fjernet',
   // Says what it deletes: sitting under the export buttons, a bare «Slett alle»
   // could be read as deleting the exports, or the whole document.
@@ -851,12 +861,13 @@ const nb = {
   'ai.keyNew': 'Lim inn nøkkelen din',
   'ai.keyOptional': 'API-nøkkel (valgfri – lokale servere trenger ingen)',
   'ai.compatPreset': 'Tjeneste',
-  'ai.compatPresetPick': 'Velg tjeneste eller skriv inn selv …',
+  'ai.compatCustom': 'Annet OpenAI-kompatibelt endepunkt',
+  'ai.compatPresetPick': 'Velg …',
   'ai.baseUrl': 'Base-URL',
   'ai.compatModelId': 'Modell-id',
   'ai.compatModelHint': 'f.eks. llama3.1 eller mistral-medium-latest',
   'ai.compatHint':
-    'For lokale modeller (Ollama og LM Studio kjører uten nøkkel – velg dem i listen) og alle andre OpenAI-kompatible endepunkter. Modellisten hentes fra endepunktet når du lagrer.',
+    'For lokale modeller (Ollama og LM Studio kjører uten nøkkel – velg dem i listen) og alle andre OpenAI-kompatible endepunkter – velg «Annet» og skriv inn base-URL-en. Modellisten hentes fra endepunktet når du lagrer.',
   'ai.modelFilter': 'Filtrer modeller …',
   // The filter searches past the selection the menu offers — say so, or the
   // models curateRemoteModels leaves out look gone rather than unlisted
@@ -1115,7 +1126,7 @@ const nb = {
 }
 
 export type MsgKey = keyof typeof nb
-type Dict = Record<MsgKey, string>
+export type Dict = Record<MsgKey, string>
 
 const en: Dict = {
   'app.cancel': 'Cancel',
@@ -1132,6 +1143,10 @@ const en: Dict = {
   'app.back': 'Back',
   'app.pageAbbrev': 'p.',
   'app.openFailed': 'Could not open the file: {error}',
+  'app.changedOnDisk': '"{name}" has changed on disk. The version shown has unsaved marks.',
+  'app.reloadFromDisk': 'Reload …',
+  'app.keepMine': 'Keep my version',
+  'app.reloadedFromDisk': '"{name}" changed on disk and was reloaded',
   'crash.title': 'Something went wrong',
   'crash.body':
     'The view stopped unexpectedly. Unsaved annotations are safely stored and will be picked up again when you reload.',
@@ -1639,6 +1654,8 @@ const en: Dict = {
   'menu.customColor': 'Pick a color …',
   'menu.aiSection': 'Assistant',
   'menu.note': 'Note',
+  'menu.bookmark': 'Create bookmark',
+  'menu.bookmarkTip': 'Bookmark this page, named by the selected text',
   'menu.comment': 'Comment',
   'menu.copy': 'Copy',
   'menu.cut': 'Cut',
@@ -1717,6 +1734,7 @@ const en: Dict = {
   'side.bookmarkRename': 'Rename (double-click the row)',
   'side.bookmarkDelete': 'Remove the bookmark',
   'viewer.bookmarkAdded': 'Page {page} bookmarked',
+  'viewer.bookmarkRenamed': 'Bookmark on page {page} renamed',
   'viewer.bookmarkRemoved': 'Bookmark on page {page} removed',
   'side.clearAll': 'Delete all annotations ({count})',
   'side.clearAllTip': 'Delete every annotation in the document',
@@ -1880,12 +1898,13 @@ const en: Dict = {
   'ai.keyNew': 'Paste your key',
   'ai.keyOptional': 'API key (optional — local servers need none)',
   'ai.compatPreset': 'Service',
-  'ai.compatPresetPick': 'Pick a service or type your own …',
+  'ai.compatCustom': 'Other OpenAI-compatible endpoint',
+  'ai.compatPresetPick': 'Pick …',
   'ai.baseUrl': 'Base URL',
   'ai.compatModelId': 'Model id',
   'ai.compatModelHint': 'e.g. llama3.1 or mistral-medium-latest',
   'ai.compatHint':
-    'For local models (Ollama and LM Studio run without a key — pick them in the list) and any other OpenAI-compatible endpoint. The model list is fetched from the endpoint when you save.',
+    'For local models (Ollama and LM Studio run without a key — pick them in the list) and any other OpenAI-compatible endpoint — pick "Other" and enter its base URL. The model list is fetched from the endpoint when you save.',
   'ai.modelFilter': 'Filter models …',
   'ai.modelFilterAll': 'Search all models …',
   'ai.modelCount': '{models} models · {vendors} vendors',
@@ -2129,12 +2148,16 @@ const en: Dict = {
   'update.extDownload': 'Download'
 }
 
-const DICTIONARIES: Record<Lang, Dict> = { nb, en }
+const DICTIONARIES: Record<Lang, Dict> = { nb, en, zh }
 
 export function resolveLanguage(pref: LanguagePreference): Lang {
   if (pref !== 'auto') return pref
   const sys = (navigator.language || 'en').toLowerCase()
-  return sys.startsWith('nb') || sys.startsWith('nn') || sys.startsWith('no') ? 'nb' : 'en'
+  if (sys.startsWith('nb') || sys.startsWith('nn') || sys.startsWith('no')) return 'nb'
+  // Every Chinese locale gets the Simplified dictionary — it is the only one
+  // we have, and it reads for a Traditional-script user too
+  if (sys.startsWith('zh')) return 'zh'
+  return 'en'
 }
 
 let current: Lang = 'nb'
@@ -2175,7 +2198,7 @@ export function t(key: MsgKey, vars?: Record<string, string | number>): string {
 
 /** Locale for date formatting etc. */
 export function locale(): string {
-  return current === 'nb' ? 'nb-NO' : 'en-GB'
+  return current === 'nb' ? 'nb-NO' : current === 'zh' ? 'zh-CN' : 'en-GB'
 }
 
 /** The text to show for a failure that came back over IPC.

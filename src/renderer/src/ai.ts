@@ -344,6 +344,26 @@ export function formatTokens(usage: AiUsage): string {
 }
 
 // ---------- Prompts (follow the app language) ----------
+//
+// Norwegian has its own prompts; the English ones serve every other interface
+// language. They say «answer in the language the user writes in», which a chip
+// cannot satisfy — «Forklar» sends no words of the reader's — so a Chinese
+// interface names its language: in the prompts that say «in English», that
+// phrase becomes the reader's language, and the open-ended ones get one line
+// appended. The user-message scaffolds stay English: the model reads them,
+// the reader does not.
+
+/** The language the fixed-task prompts ask for */
+function answerLanguage(): string {
+  return getLanguage() === 'zh' ? 'Simplified Chinese' : 'English'
+}
+
+/** Appended to the open-ended English prompts (chat, ask, summary, search) */
+function uiLanguageNote(): string {
+  return getLanguage() === 'zh'
+    ? '\n\nThe reader uses the app in Simplified Chinese: answer in Simplified Chinese unless they write to you in another language.'
+    : ''
+}
 
 export function chatSystem(): string {
   if (getLanguage() === 'nb') {
@@ -371,7 +391,7 @@ STYLE
 GROUNDING
 - Base answers on the document and cite the passage for every substantive point, so the user can jump there in the PDF.
 - Explicitly separate what the document says from your own assessment or background knowledge (e.g. "The paper reports … Beyond the document: …").
-- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.`
+- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.${uiLanguageNote()}`
 }
 
 /**
@@ -411,7 +431,7 @@ export function explainSystem(mode: 'explain' | 'simplify'): string {
     mode === 'explain'
       ? 'Explain the selected passage: unpack what it actually claims, and why it appears at this exact point in the document (its role in the argument). Do not merely paraphrase it.'
       : 'Rewrite the selected text in plainer words and shorter sentences, preserving the meaning and precision. Return only the rewritten text — no commentary on what you changed.'
-  return `You are helping a reader in the PDF reader PDF Scholar. ${task} Answer briefly (2–6 sentences), in English, with no preamble or summary. Use the page context when needed.`
+  return `You are helping a reader in the PDF reader PDF Scholar. ${task} Answer briefly (2–6 sentences), in ${answerLanguage()}, with no preamble or summary. Use the page context when needed.`
 }
 
 /** Free-form question about the selection. The whole document is attached by
@@ -431,7 +451,7 @@ export function askSystem(): string {
 - Answer briefly (2–6 sentences), with no preamble or summary, in the language the question is asked in.
 - Base the answer on the document and cite the passage for every substantive point, so the user can jump there in the PDF.
 - Explicitly separate what the document says from your own assessment or background knowledge.
-- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.`
+- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.${uiLanguageNote()}`
 }
 
 /** Methodological critique of the selected claim/passage. The whole document
@@ -451,7 +471,7 @@ Vær nøktern og konkret; ingen generiske innvendinger som kunne stått til enhv
   }
   return `You are the research assistant in the PDF reader PDF Scholar. The user has selected a claim or passage in a document they are reading and wants a critical, methodological look at it. The full document text is attached with page markers.
 
-Answer in three short parts, in English:
+Answer in three short parts, in ${answerLanguage()}:
 
 1. **What the claim rests on** – which method, data or assumptions in the document carry this exact claim. Cite the passages.
 2. **Key caveats** – 1–2 weaknesses or conditions that limit how far the claim reaches (preferably ones the document itself notes; if so, separate the document's own caveats from yours).
@@ -477,7 +497,7 @@ export function figureSystem(): string {
 - First say in one sentence what the snippet is (e.g. "A scatter plot of … against …").
 - Then explain what it shows and what the main message is – the axes/columns, the pattern that matters, and how it connects to the surrounding text.
 - Read numbers and labels from the image carefully; if something is illegible, say so instead of guessing.
-- Answer briefly (3–8 sentences), in English, with no preamble or summary.`
+- Answer briefly (3–8 sentences), in ${answerLanguage()}, with no preamble or summary.`
 }
 
 /** User-message scaffold for the figure snip (the image itself is attached
@@ -527,7 +547,7 @@ Hold hele svaret under ca. 120 ord.`
   }
   return `You are the reference assistant in the PDF reader PDF Scholar. The user has selected a literature citation in a document they are reading. The full document text is attached with page markers; use it to find the reference list and the context around the citation.
 
-Answer in three short parts, in English:
+Answer in three short parts, in ${answerLanguage()}:
 
 1. **The reference** – reproduce the complete entry from the document's reference list. If you cannot find it there, say so explicitly.
 2. **Why it is cited here** – 1–2 sentences based on the text around the citation: which claim, method or premise the reference supports at this exact spot. Quote the passage.
@@ -552,7 +572,7 @@ Svar KUN med en nummerert liste, uten innledning eller avslutning. Hvert punkt: 
   }
   return `Find the 3–8 passages in the document that best discuss this topic: "${query}"
 
-Answer ONLY with a numbered list, no preamble or closing. Each item: one short description (max 15 words) of what the passage says, citing a short verbatim quote (10–30 words) from the passage as the source. Rank by relevance. If the document does not discuss the topic, say so in one sentence with no list.`
+Answer ONLY with a numbered list, no preamble or closing. Each item: one short description (max 15 words) of what the passage says, citing a short verbatim quote (10–30 words) from the passage as the source. Rank by relevance. If the document does not discuss the topic, say so in one sentence with no list.${uiLanguageNote()}`
 }
 
 /** User-message scaffold for reference lookup */
@@ -565,6 +585,9 @@ export function referenceUserMessage(selection: string, pageNumber: number, page
 /** Default (editable) question for the annotations flow — prefilled in the
  *  composer so the user sees and can rephrase what will be asked. */
 export function annotationsDefaultQuestion(): string {
+  if (getLanguage() === 'zh') {
+    return '总结我在批注中关注的内容，可按主题分组，并指出看起来需要我跟进的要点。必要时参考文档内容。'
+  }
   return getLanguage() === 'nb'
     ? 'Oppsummer hva jeg har vært opptatt av i merknadene mine, grupper gjerne etter tema, og pek på punkter det ser ut som jeg bør følge opp. Bruk dokumentet for kontekst der det trengs.'
     : 'Summarize what I have been focusing on in my annotations, group by theme where natural, and point out items I appear to need to follow up on. Use the document for context where needed.'
@@ -578,7 +601,9 @@ export function annotationsQuestion(question: string, block: string): string {
   const intro =
     getLanguage() === 'nb'
       ? 'Merknadene mine i dokumentet (markeringer, understrekinger og notater, med sidetall):'
-      : 'My annotations in the document (highlights, underlines and notes, with page numbers):'
+      : getLanguage() === 'zh'
+        ? '我在文档中的批注（高亮、下划线和便签，附页码）：'
+        : 'My annotations in the document (highlights, underlines and notes, with page numbers):'
   return `${question.trim()}\n\n${intro}\n${block}`
 }
 
@@ -606,5 +631,5 @@ Hold hver del til 1–4 setninger og siter kilden for hvert vesentlige punkt. Hv
 #### Contribution
 #### Limitations
 
-Keep each section to 1–4 sentences and cite the source for every substantive point. If the document is not an empirical research article, adapt the sections to the document type (e.g. Problem/Approach/Conclusions for a report) and briefly say so.`
+Keep each section to 1–4 sentences and cite the source for every substantive point. If the document is not an empirical research article, adapt the sections to the document type (e.g. Problem/Approach/Conclusions for a report) and briefly say so.${uiLanguageNote()}`
 }

@@ -211,6 +211,9 @@ function loadFailure(err: unknown, bytes: Uint8Array): Error {
   return new Error(`${message} ${shape}`)
 }
 
+/** Keys each note draft (NoteDraft.id) */
+let noteDraftSeq = 0
+
 const EMPTY_ANNOTS: PageAnnotation[] = []
 const EMPTY_RECTS: PageRect[] = []
 
@@ -356,6 +359,10 @@ interface NavPosition {
 }
 
 interface NoteDraft {
+  /** One per draft: keys the popover, so a second note started while the
+   *  first is open gets its own instance and the first can save on its way
+   *  out (issue #34) instead of the same textarea moving to the new spot. */
+  id: number
   x: number
   y: number
   /** absent = 'main' — the document the note lands in */
@@ -3147,6 +3154,25 @@ export default function PdfViewer({
     [persistBookmarks]
   )
 
+  /** «Lag bokmerke» from the selection menu (issue #39): a bookmark on the
+   *  page named by the selected text. One bookmark per page is the list's
+   *  rule, so a page that already has one gets the new name instead. */
+  const bookmarkWithLabel = useCallback(
+    (page: number, label: string) => {
+      const existing = bookmarksRef.current.find((b) => b.page === page)
+      if (existing) {
+        persistBookmarks(bookmarksRef.current.map((b) => (b.page === page ? { ...b, label } : b)))
+        showToast(t('viewer.bookmarkRenamed', { page }))
+        return
+      }
+      persistBookmarks(
+        [...bookmarksRef.current, { page, label, createdAt: Date.now() }].sort((a, b) => a.page - b.page)
+      )
+      showToast(t('viewer.bookmarkAdded', { page }))
+    },
+    [persistBookmarks, showToast]
+  )
+
   const saveDocument = useCallback(async () => {
     // The file may have changed outside the app since editing began — an
     // in-place save would silently clobber that external update. Ask first;
@@ -4293,6 +4319,18 @@ export default function PdfViewer({
           window.getSelection()?.removeAllRanges()
           break
         }
+        case 'bookmark': {
+          // The page is where the selection ends; the name is the selected
+          // text on one line, cut to what the sidebar's row can show.
+          if (!menu || menu.mode !== 'selection' || menu.foreign) break
+          const label = selText.replace(/\s+/g, ' ').trim().slice(0, 120)
+          const last = collectSelectionRects().at(-1)
+          setMenu(null)
+          if (!last || !label) break
+          bookmarkWithLabel(last.pageNumber, label)
+          window.getSelection()?.removeAllRanges()
+          break
+        }
         case 'note': {
           if (!menu) break
           if (menu.mode === 'selection') {
@@ -4304,6 +4342,7 @@ export default function PdfViewer({
             if (last) {
               const r = last.rects[last.rects.length - 1]
               setNoteDraft({
+                id: ++noteDraftSeq,
                 x: menu.x,
                 y: menu.y,
                 avoid,
@@ -4314,6 +4353,7 @@ export default function PdfViewer({
             }
           } else if (menu.pagePoint) {
             setNoteDraft({
+              id: ++noteDraftSeq,
               x: menu.x,
               y: menu.y,
               doc: menu.foreign ? 'split' : undefined,
@@ -4449,7 +4489,7 @@ export default function PdfViewer({
         }
       }
     },
-    [menu, pdf, payload.name, applyMarkup, collectSelectionRects, armImageGrab]
+    [menu, pdf, payload.name, applyMarkup, collectSelectionRects, armImageGrab, bookmarkWithLabel]
   )
 
   /** Snip-to-explain: locate the page under the dragged box, re-render that
@@ -4823,6 +4863,7 @@ export default function PdfViewer({
           }
           const [px, py] = pagePointFromClientRef.current?.(clientX, clientY, el) ?? [0, 0]
           setNoteDraft({
+            id: ++noteDraftSeq,
             x: clientX,
             y: clientY,
             doc: docOf(paneOfEl(el)),
@@ -4850,24 +4891,34 @@ export default function PdfViewer({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [notePlacing])
 
+  /** Persist one draft's note. Takes the draft explicitly: the popover's
+   *  unmount flush (issue #34) runs after the viewer has moved on to the next
+   *  draft, or to none, so it must not read the current state. */
+  const commitNote = useCallback(
+    (draft: NoteDraft, text: string) => {
+      void persistAnnotation(draft.pageNumber, 'note', [draft.anchor], NOTE_COLOR, 1, text, undefined, draft.doc)
+    },
+    [persistAnnotation]
+  )
+
   const saveNote = useCallback(
     (text: string) => {
       if (!noteDraft) return
-      void persistAnnotation(
-        noteDraft.pageNumber,
-        'note',
-        [noteDraft.anchor],
-        NOTE_COLOR,
-        1,
-        text,
-        undefined,
-        noteDraft.doc
-      )
+      commitNote(noteDraft, text)
       setNoteDraft(null)
       window.getSelection()?.removeAllRanges()
     },
-    [noteDraft, persistAnnotation]
+    [noteDraft, commitNote]
   )
+
+  /** Avbryt and Esc: the draft goes WITHOUT its text. The viewer's own Escape
+   *  handler is a capture listener and runs before the popover's, so it has to
+   *  say so here or the popover's unmount flush would save what Esc threw away. */
+  const noteDiscardRef = useRef(false)
+  const discardNote = useCallback(() => {
+    noteDiscardRef.current = true
+    setNoteDraft(null)
+  }, [])
 
   // Convert client (screen) coordinates to PAGE space (what annotations store
   // and hit-tests expect), routing through the rotation transform. The one
@@ -6596,7 +6647,7 @@ export default function PdfViewer({
     // still be bound to something below.
     if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (freeTextDraft) setFreeTextDraft(null)
-      else if (noteDraft) setNoteDraft(null)
+      else if (noteDraft) discardNote()
       else if (menu) setMenu(null)
       else if (aiQuick) setAiQuick(null)
       else if (annotPopover) setAnnotPopover(null)
@@ -7903,11 +7954,19 @@ export default function PdfViewer({
         })()}
       {noteDraft && (
         <NotePopover
+          key={noteDraft.id}
           x={noteDraft.x}
           y={noteDraft.y}
           avoid={noteDraft.avoid}
           onSave={saveNote}
-          onCancel={() => setNoteDraft(null)}
+          onFlush={(text) => {
+            // This instance only ever rendered for ITS draft (the key), so
+            // the closure's noteDraft is the one the text belongs to
+            const discard = noteDiscardRef.current
+            noteDiscardRef.current = false
+            if (!discard) commitNote(noteDraft, text)
+          }}
+          onCancel={discardNote}
         />
       )}
       {readAloud !== 'closed' && (

@@ -40,6 +40,7 @@
     "test:image-regions": "node scripts/test-image-regions.mjs",
     "test:doc-registry": "node scripts/test-doc-registry.mjs",
     "test:doc-load": "node scripts/test-doc-load.mjs",
+    "test:search": "node scripts/test-search.mjs",
     "test:retrieval": "node scripts/test-ai-retrieval.mjs",
     "test:ai-chat": "node scripts/test-ai-chat.mjs",
     "test:model-curation": "node scripts/test-model-curation.mjs",

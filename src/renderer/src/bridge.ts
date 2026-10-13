@@ -156,6 +156,8 @@ export const webApi: PdfxApi = {
   // there is nothing to notify about. See docs/PLATFORMS.md.
   onAnnotationsChangedElsewhere: () => () => {},
   onDraftEndedElsewhere: () => () => {},
+  // No file watcher in a browser: a changed file is re-opened by hand
+  onFileChangedOnDisk: () => () => {},
   // Browser preview: a new browser tab stands in for a new app window
   newWindow: (path) => {
     window.open(path ? `${location.origin}/#open=${encodeURIComponent(path)}` : location.href, '_blank')

@@ -76,6 +76,13 @@ const api: PdfxApi = {
       ipcRenderer.removeListener('doc:draft-ended-elsewhere', listener)
     }
   },
+  onFileChangedOnDisk: (cb: (path: string) => void) => {
+    const listener = (_e: unknown, path: string): void => cb(path)
+    ipcRenderer.on('doc:changed-on-disk', listener)
+    return () => {
+      ipcRenderer.removeListener('doc:changed-on-disk', listener)
+    }
+  },
   printFile: (path: string) => ipcRenderer.invoke('file:print', path),
   saveTextFile: (defaultName: string, content: string | Uint8Array) =>
     ipcRenderer.invoke('file:save-text', defaultName, content),

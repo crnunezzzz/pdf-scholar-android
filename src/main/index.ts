@@ -11,7 +11,8 @@ import {
   screen,
   shell
 } from 'electron'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, watch } from 'node:fs'
+import type { FSWatcher } from 'node:fs'
 import { open, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -212,12 +213,15 @@ async function sessionRestorePlan(): Promise<StoredSessionWindow[]> {
   return restorePlan(stored, state.settings.restoreSession !== false, (p) => exists.has(p))
 }
 
-/** Whether native dialogs should speak Norwegian. The renderer's i18n cannot be
- *  reached from main, so the handful of native strings below resolve the same
- *  language setting themselves — this is the one place that decision is made. */
-function preferNorwegian(): boolean {
+/** The language native dialogs speak. The renderer's i18n cannot be reached
+ *  from main, so the handful of native strings below resolve the same language
+ *  setting themselves — this is the one place that decision is made (mirrors
+ *  resolveLanguage in the renderer's i18n.ts). */
+function dialogLanguage(): 'nb' | 'en' | 'zh' {
   const pref = getState().settings.language
-  return pref === 'nb' || (pref === 'auto' && app.getLocale().toLowerCase().startsWith('n'))
+  if (pref !== 'auto') return pref
+  const sys = app.getLocale().toLowerCase()
+  return sys.startsWith('n') ? 'nb' : sys.startsWith('zh') ? 'zh' : 'en'
 }
 
 /** Native-dialog strings following the app language setting */
@@ -229,17 +233,29 @@ function dialogStrings(): {
   saveFailedTitle: string
   saveFailedDetail(names: string): string
 } {
-  return preferNorwegian()
-    ? {
-        buttons: ['Lagre', 'Ikke lagre', 'Avbryt'],
-        message: (name) => `Vil du lagre endringene i «${name}»?`,
-        messageMany: (count) => `Vil du lagre endringene i ${count} dokumenter?`,
-        detail: 'Endringene går tapt hvis du ikke lagrer dem.',
-        saveFailedTitle: 'Lagringen mislyktes',
-        saveFailedDetail: (names) =>
-          `Kunne ikke lagre ${names}. Endringene er beholdt, og dokumentet er fortsatt åpent.`
-      }
-    : {
+  const lang = dialogLanguage()
+  if (lang === 'nb') {
+    return {
+      buttons: ['Lagre', 'Ikke lagre', 'Avbryt'],
+      message: (name) => `Vil du lagre endringene i «${name}»?`,
+      messageMany: (count) => `Vil du lagre endringene i ${count} dokumenter?`,
+      detail: 'Endringene går tapt hvis du ikke lagrer dem.',
+      saveFailedTitle: 'Lagringen mislyktes',
+      saveFailedDetail: (names) =>
+        `Kunne ikke lagre ${names}. Endringene er beholdt, og dokumentet er fortsatt åpent.`
+    }
+  }
+  if (lang === 'zh') {
+    return {
+      buttons: ['保存', '不保存', '取消'],
+      message: (name) => `是否保存对“${name}”的更改？`,
+      messageMany: (count) => `是否保存对 ${count} 个文档的更改？`,
+      detail: '如果不保存，更改将丢失。',
+      saveFailedTitle: '保存失败',
+      saveFailedDetail: (names) => `无法保存 ${names}。更改已保留，文档仍处于打开状态。`
+    }
+  }
+  return {
         buttons: ['Save', "Don't save", 'Cancel'],
         message: (name) => `Do you want to save the changes to “${name}”?`,
         messageMany: (count) => `Do you want to save the changes to ${count} documents?`,
@@ -258,19 +274,27 @@ async function askExternalUpdateVerdict(
   parent: BrowserWindow,
   path: string
 ): Promise<'save' | 'discard' | 'cancel'> {
-  const s = preferNorwegian()
-    ? {
-        buttons: ['Lagre kopi', 'Ikke lagre', 'Avbryt'],
-        message: `«${basename(path)}» er endret utenfor appen`,
-        detail:
-          'Du har ulagrede merker i den gamle versjonen. Lagre dem som en kopi før den nye versjonen lastes inn?'
-      }
-    : {
-        buttons: ['Save a copy', "Don't save", 'Cancel'],
-        message: `"${basename(path)}" has changed outside the app`,
-        detail:
-          'You have unsaved marks in the old version. Save them as a copy before the new version loads?'
-      }
+  const lang = dialogLanguage()
+  const s =
+    lang === 'nb'
+      ? {
+          buttons: ['Lagre kopi', 'Ikke lagre', 'Avbryt'],
+          message: `«${basename(path)}» er endret utenfor appen`,
+          detail:
+            'Du har ulagrede merker i den gamle versjonen. Lagre dem som en kopi før den nye versjonen lastes inn?'
+        }
+      : lang === 'zh'
+        ? {
+            buttons: ['保存副本', '不保存', '取消'],
+            message: `“${basename(path)}”已在应用外被修改`,
+            detail: '旧版本中有未保存的标注。是否在加载新版本之前将其另存为副本？'
+          }
+        : {
+            buttons: ['Save a copy', "Don't save", 'Cancel'],
+            message: `"${basename(path)}" has changed outside the app`,
+            detail:
+              'You have unsaved marks in the old version. Save them as a copy before the new version loads?'
+          }
   const { response } = await dialog.showMessageBox(parent, {
     type: 'question',
     buttons: s.buttons,
@@ -675,6 +699,7 @@ function createWindow(openPath?: string | null, restore?: StoredSessionWindow): 
     pendingPaths.delete(wcId)
     pendingSessions.delete(wcId)
     openDocs.delete(wcId)
+    pruneWatchers()
     forceClose.delete(wcId)
     // The session (see sessionWindows): a quit already wrote every window; the
     // last window closing writes its own strip as the one to come back; one of
@@ -861,6 +886,100 @@ async function waitUntilWhole(path: string): Promise<void> {
   // file than waited on while the window sits empty.
 }
 
+// ---------- Files changing on disk (issue #41) ----------
+//
+// A document open in any window is watched for changes made outside the app —
+// a LaTeX build, a sync client, another program's save — and the windows
+// holding it are told, so a clean tab can reload and a tab with unsaved marks
+// can offer to (App.tsx decides; main only reports). Watched through its
+// FOLDER: an atomic replace (write a temp file, rename it over the original —
+// what most writers do, our own saveDraft included) swaps the inode, and an
+// inotify watch on the file itself dies with the old one. The per-path
+// fingerprint (size:mtime, recorded at every read and every save of ours) is
+// what separates a change from the noise: our own save, a touch, the same
+// bytes written again. A write in progress is waited out by the same rule a
+// torn open uses (waitUntilWhole), so the renderer never reads half a file.
+const fileWatchers = new Map<string, { watcher: FSWatcher; timer: NodeJS.Timeout | null }>()
+/** path → `size:mtimeMs` as we last read or wrote it */
+const lastSeen = new Map<string, string>()
+const WATCH_DEBOUNCE_MS = 300
+
+async function fingerprintOf(path: string): Promise<string | null> {
+  try {
+    const { size, mtimeMs } = await stat(path)
+    return `${size}:${mtimeMs}`
+  } catch {
+    return null
+  }
+}
+
+/** Record the file as we last read or wrote it, so the watcher stays quiet
+ *  about our own doing */
+async function noteFileSeen(path: string): Promise<void> {
+  const fp = await fingerprintOf(path)
+  if (fp) lastSeen.set(path, fp)
+}
+
+async function announceDiskChange(path: string): Promise<void> {
+  if (!fileWatchers.has(path)) return
+  await waitUntilWhole(path)
+  const fp = await fingerprintOf(path)
+  // Gone (the renderer hears of that when it next reads), our own write, or a
+  // touch that changed nothing we read: say nothing
+  if (!fp || fp === lastSeen.get(path)) return
+  lastSeen.set(path, fp)
+  for (const [wcId, paths] of openDocs) {
+    if (!paths.has(path)) continue
+    const win = BrowserWindow.getAllWindows().find(
+      (w) => !w.isDestroyed() && !w.webContents.isDestroyed() && w.webContents.id === wcId
+    )
+    win?.webContents.send('doc:changed-on-disk', path)
+  }
+}
+
+function watchFile(path: string): void {
+  if (fileWatchers.has(path)) return
+  const name = basename(path).toLowerCase()
+  try {
+    const entry: { watcher: FSWatcher; timer: NodeJS.Timeout | null } = {
+      watcher: watch(dirname(path), (_event, changed) => {
+        // The name is the file's on Windows and Linux; macOS may report null
+        // for the folder itself, which the fingerprint check then settles
+        if (typeof changed === 'string' && changed.toLowerCase() !== name) return
+        if (entry.timer) clearTimeout(entry.timer)
+        entry.timer = setTimeout(() => {
+          entry.timer = null
+          void announceDiskChange(path)
+        }, WATCH_DEBOUNCE_MS)
+      }),
+      timer: null
+    }
+    // A folder that stops being watchable (a share that went away): no
+    // reload, no crash — the next open reads fresh bytes anyway
+    entry.watcher.on('error', () => stopWatching(path))
+    fileWatchers.set(path, entry)
+  } catch {
+    // Cannot watch here (a network share, a folder without the right): the
+    // document still opens, it just does not follow the file
+  }
+}
+
+function stopWatching(path: string): void {
+  const entry = fileWatchers.get(path)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.watcher.close()
+  fileWatchers.delete(path)
+  lastSeen.delete(path)
+}
+
+/** Drop the watchers of paths no window holds any more */
+function pruneWatchers(): void {
+  const held = new Set<string>()
+  for (const paths of openDocs.values()) for (const p of paths) held.add(p)
+  for (const path of [...fileWatchers.keys()]) if (!held.has(path)) stopWatching(path)
+}
+
 async function loadPdf(given: string, awaitSettled = false): Promise<FilePayload | FileError> {
   // The path returned below becomes the document's identity in the renderer and
   // is what every later save, draft and close is keyed by — so a Windows 8.3
@@ -875,6 +994,7 @@ async function loadPdf(given: string, awaitSettled = false): Promise<FilePayload
     // load those bytes so the work is silently recovered
     if (awaitSettled) await waitUntilWhole(readPathFor(path))
     const data = await readFile(readPathFor(path))
+    void noteFileSeen(path)
     const name = basename(path)
     addRecent(path, name)
     app.addRecentDocument(path)
@@ -1228,10 +1348,12 @@ function registerIpc(): void {
     const set = openDocs.get(e.sender.id) ?? new Set<string>()
     set.add(path)
     openDocs.set(e.sender.id, set)
+    watchFile(path)
   })
 
   ipcMain.on('doc:closed', (e, path: string) => {
     openDocs.get(e.sender.id)?.delete(path)
+    pruneWatchers()
   })
 
   // The renderer unlocked an encrypted document; the write engine opens the
@@ -1271,6 +1393,8 @@ function registerIpc(): void {
       // silently saving a stale draft would lose the user's latest marks.
       await flushAnnotations(draftPathFor(path))
       saveDraft(path)
+      // Before the watcher's debounce runs out: this write is ours
+      await noteFileSeen(path)
       notifyDraftEnded(e.sender.id, path)
       return { ok: true }
     } catch (err) {
