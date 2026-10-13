@@ -185,6 +185,25 @@ const SHOTS = [
     `
   },
   {
+    // The preview section's own frame (Emil, 2026-10-13): a citation in the
+    // introduction, its reference entry opened beside it, the abstract folded
+    // out under the entry — the whole claim in one picture. Page 2, so the
+    // frame is not a fourth cover. The abstract comes from docs/ai-fixtures/
+    // abstract.json, which the first keyless run records itself (main's
+    // abstract:lookup fetches live when the file is missing and writes it),
+    // so the frame reads the same every run and needs no network after that.
+    name: 'link_preview',
+    caption: 'A citation previewed where it is cited: the reference entry beside the text, the abstract under it',
+    needsAi: true,
+    setup: `
+      await ui.closePanels()
+      await ui.goToPage(2)
+      await ui.fitWidth()
+      await ui.previewCitation()
+      ui.expectPreview()
+    `
+  },
+  {
     name: 'dual-pane',
     caption: 'Split view: two columns, own page and zoom, one set of tools',
     setup: `
@@ -1691,6 +1710,41 @@ const ui = {
   /** A couple of real marks on the page, so the tools shot has something to
    *  show. Restricted to text that is ACTUALLY ON SCREEN — marking a span on a
    *  scrolled-away page produced a screenshot with no visible marks at all. */
+  /** Rest the pointer on a citation in the visible page and fetch its
+   *  abstract: the first internal link in the upper half of the page (page 2
+   *  of the house doc opens with Recurrent neural networks … [13] … [7]). A
+   *  dispatched pointerover is what the preview listens for; the abstract is
+   *  a click in the window's footer. */
+  async previewCitation() {
+    const page = this.pageElA();
+    const box = this.visibleBoxA();
+    const links = [...page.querySelectorAll('a.pdf-link.internal')].filter((a) => {
+      const r = a.getBoundingClientRect();
+      return r.width > 0 && r.top > box.top + 40 && r.bottom < box.top + box.height * 0.5;
+    });
+    if (links.length === 0) throw new Error('no internal link in the upper half of the page');
+    const a = links[0];
+    const r = a.getBoundingClientRect();
+    a.dispatchEvent(new PointerEvent('pointerover', {
+      bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerType: 'mouse', isPrimary: true
+    }));
+    let win = null;
+    for (let i = 0; i < 40 && !win; i++) { await settle(250); win = document.querySelector('.link-preview'); }
+    if (!win) throw new Error('the link preview did not open');
+    const ask = win.querySelector('.lpa-ask');
+    if (!ask) throw new Error('the preview has no abstract button — is the link a citation?');
+    ask.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    let panel = null;
+    for (let i = 0; i < 80 && !panel; i++) { await settle(250); panel = document.querySelector('.link-preview-abstract .lpa-text'); }
+    if (!panel) throw new Error('no abstract arrived (is docs/ai-fixtures/abstract.json recorded, or the network up?)');
+    await settle(500);
+  },
+  expectPreview() {
+    const win = document.querySelector('.link-preview');
+    if (!win) throw new Error('the preview closed before the shot');
+    this.expectInFrame(win, 'the link preview');
+    if (!document.querySelector('.link-preview-abstract .lpa-title')) throw new Error('the abstract has no title');
+  },
   async highlightSomeText() {
     const pages = document.querySelector('.pages[data-pane="a"]');
     const box = pages.getBoundingClientRect();

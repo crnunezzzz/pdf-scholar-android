@@ -53,7 +53,7 @@ const PROVIDERS: AiProviderId[] = [
 //
 // Never available in a shipped app: both are opt-in environment variables AND
 // gated on an unpackaged build.
-const devOnlyDir = (name: string): string | null => {
+export const devOnlyDir = (name: string): string | null => {
   const dir = process.env[name]
   return dir && !app.isPackaged ? dir : null
 }

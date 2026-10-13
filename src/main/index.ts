@@ -11,7 +11,7 @@ import {
   screen,
   shell
 } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, watch } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { open, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url'
 import type {
   AiCitationTarget,
   AnnotateRequest,
+  CitationAbstract,
   CloseOutcome,
   DeleteAnnotationRequest,
   FileError,
@@ -36,7 +37,7 @@ import type {
   TabDropResult
 } from '../shared/types'
 import { buildAssistantHash } from '../shared/viewer-url'
-import { registerAiIpc } from './ai'
+import { devOnlyDir, registerAiIpc } from './ai'
 import {
   applyAnnotation,
   deleteAnnotation,
@@ -1540,11 +1541,32 @@ function registerIpc(): void {
   // The abstract behind a citation (link preview, issue #31): the entry's
   // TEXT comes in; every request is built in src/shared/abstract.ts from four
   // fixed hosts, so renderer input never becomes a URL of its own.
-  ipcMain.handle('abstract:lookup', (_e, entry: unknown) =>
-    typeof entry === 'string'
-      ? citationAbstract(entry)
-      : { error: 'not an entry', code: 'abstract-unidentified' }
-  )
+  ipcMain.handle('abstract:lookup', async (_e, entry: unknown) => {
+    if (typeof entry !== 'string') return { error: 'not an entry', code: 'abstract-unidentified' }
+    // The screenshot run (scripts/shoot-screenshots.mjs) replays a recorded
+    // abstract like it replays the assistant's answers, so the frame is the
+    // same every run and needs no network. Keyless, so it records ITSELF:
+    // the first run with the fixture dir set and no abstract.json fetches
+    // live and writes the file. Dev-only, like the AI fixtures.
+    const fixtureDir = devOnlyDir('PDFX_AI_FIXTURE')
+    const fixture = fixtureDir ? join(fixtureDir, 'abstract.json') : null
+    if (fixture && existsSync(fixture)) {
+      try {
+        return JSON.parse(readFileSync(fixture, 'utf8')) as CitationAbstract
+      } catch {
+        /* a broken recording: fetch instead */
+      }
+    }
+    const result = await citationAbstract(entry)
+    if (fixture && !('error' in result)) {
+      try {
+        writeFileSync(fixture, JSON.stringify(result, null, 2), 'utf8')
+      } catch {
+        /* recording is best-effort; the shot already has its abstract */
+      }
+    }
+    return result
+  })
 
   // «Kopier bilde»: the renderer hands over PNG bytes, main puts them on the
   // clipboard. Done here rather than with navigator.clipboard.write because
