@@ -54,6 +54,10 @@ export function AiSettings({ config, onSaved, onClose }: SettingsProps): React.J
   const [apiVersion, setApiVersion] = useState(config.azure.apiVersion)
   const [compatUrl, setCompatUrl] = useState(config.compat.baseUrl)
   const compatUrlRef = useRef<HTMLInputElement>(null)
+  /** «Annet endepunkt» picked while the URL field is still empty: the menu
+   *  must show the pick at once, not only once something is typed (Emil,
+   *  2026-10-13 — derived from the URL alone, the pick looked ignored) */
+  const [customPicked, setCustomPicked] = useState(false)
   const [compatModel, setCompatModel] = useState(config.models.compat)
   const [access, setAccess] = useState<AiAccessMode>(config.access)
   const [saving, setSaving] = useState(false)
@@ -346,7 +350,7 @@ export function AiSettings({ config, onSaved, onClose }: SettingsProps): React.J
                 <select
                   value={
                     compatPresets().find((p) => p.url === compatUrl.trim())?.url ??
-                    (compatUrl.trim() ? CUSTOM_ENDPOINT : '')
+                    (customPicked || compatUrl.trim() ? CUSTOM_ENDPOINT : '')
                   }
                   onChange={(e) => {
                     // «Annet endepunkt» is a named row for the URL field
@@ -356,9 +360,13 @@ export function AiSettings({ config, onSaved, onClose }: SettingsProps): React.J
                     // Picking it frees the field from a preset's URL and
                     // puts the cursor there.
                     if (e.target.value === CUSTOM_ENDPOINT) {
+                      setCustomPicked(true)
                       if (compatPresets().some((p) => p.url === compatUrl.trim())) setCompatUrl('')
                       compatUrlRef.current?.focus()
-                    } else if (e.target.value) setCompatUrl(e.target.value)
+                    } else {
+                      setCustomPicked(false)
+                      if (e.target.value) setCompatUrl(e.target.value)
+                    }
                   }}
                 >
                   <option value="">{t('ai.compatPresetPick')}</option>
