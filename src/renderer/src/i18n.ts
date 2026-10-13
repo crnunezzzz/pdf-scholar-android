@@ -430,7 +430,8 @@ const nb = {
   'settings.linkPreview': 'Forhåndsvis lenker',
   'settings.linkPreviewTip':
     'Hold pekeren over en henvisning, en figur eller en ligning for å se hva lenken peker på – uten å forlate siden. Langt trykk på berøringsskjerm.',
-  'settings.linkPreviewDelay': 'Ventetid før forhåndsvisningen',
+  'settings.linkPreviewDelay': 'Åpner etter',
+  'settings.linkPreviewDelayTip': 'Hvor lenge pekeren må hvile på lenken før vinduet åpner: 150, 350 eller 700 ms',
   'settings.linkPreviewDelay.short': 'Kort',
   'settings.linkPreviewDelay.medium': 'Middels',
   'settings.linkPreviewDelay.long': 'Lang',
@@ -1499,7 +1500,8 @@ const en: Dict = {
   'settings.linkPreview': 'Preview links',
   'settings.linkPreviewTip':
     'Rest the pointer on a citation, a figure or an equation reference to see what the link points to — without leaving the page. Long-press on a touchscreen.',
-  'settings.linkPreviewDelay': 'Delay before the preview',
+  'settings.linkPreviewDelay': 'Opens after',
+  'settings.linkPreviewDelayTip': 'How long the pointer rests on the link before the window opens: 150, 350 or 700 ms',
   'settings.linkPreviewDelay.short': 'Short',
   'settings.linkPreviewDelay.medium': 'Medium',
   'settings.linkPreviewDelay.long': 'Long',

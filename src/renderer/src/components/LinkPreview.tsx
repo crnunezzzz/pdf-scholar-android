@@ -23,6 +23,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useDismissable } from '../useDismissable'
+import { useResizable } from '../useResizable'
+import type { BoxSize } from '../useResizable'
 import { t } from '../i18n'
 import { bridge } from '../bridge'
 import type { CitationAbstract, FileError } from '../../../shared/types'
@@ -33,6 +35,8 @@ import {
   citedRange,
   destLabel,
   destOnFigureCaption,
+  entryBox,
+  entryLines,
   familySiblings,
   LINK_RECORDS,
   placeExpanded,
@@ -76,6 +80,11 @@ interface Open {
    *  the abstract button stands down (one abstract for five works would be
    *  a guess about which) */
   range: [number, number] | null
+  /** Cut to the reference entry itself (a citation whose entry could be
+   *  read off the page): no neighbours, no marker, and no scrolling unless
+   *  the entry is taller than the window may be */
+  entry: boolean
+  entryFits: boolean
 }
 
 /** What «Sammendrag» found, per document and destination — a second hover on
@@ -91,10 +100,14 @@ const CLOSE_GRACE_MS = 220
 const LONG_PRESS_MS = 450
 /** The footer line under the page window, borders included (app.css) */
 const FOOT_PX = 27
-/** The page window's height once an abstract is in: the entry's first lines
- *  — enough to see what was matched — and the rest of the height goes to the
- *  abstract */
-const COMPACT_PAGE_PX = 84
+/** The page part's height once an abstract is in: the whole entry when it
+ *  is short (it usually is — the window is cut to it), at most this share
+ *  of the screen for a long range, so the abstract gets the rest. The
+ *  entry is never compacted to a band (Emil, 2026-10-13: it read as the
+ *  abstract covering the reference). */
+const PAGE_SHARE_WITH_PANEL = 0.4
+const pagePartHeight = (o: Open, hasPanel: boolean, winH: number): number =>
+  hasPanel ? Math.min(o.box.h, Math.round(winH * PAGE_SHARE_WITH_PANEL)) : o.box.h
 /** Rendered pages kept per document. A paper's citations land on its one to
  *  three reference pages, so a handful makes every hover after the first one
  *  on a page instant. */
@@ -162,6 +175,20 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
   const draggedRef = useRef(false)
   const dragRef = useRef<{ dx: number; dy: number } | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  /** The corner grip (Emil, 2026-10-13: a figure can be bigger than the
+   *  window): sizes the page part; null = the size the rules gave it. A
+   *  resized window is being read, so it stays when the pointer leaves. */
+  const [size, setSize] = useState<BoxSize | null>(null)
+  const { gripProps } = useResizable(
+    scrollerRef,
+    size,
+    (s) => {
+      setSize(s)
+      pinnedRef.current = true
+      clearClose()
+    },
+    { axis: 'both', minW: 160, minH: 60 }
+  )
 
   const clearArm = (): void => {
     if (armTimer.current !== null) window.clearTimeout(armTimer.current)
@@ -202,22 +229,44 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     const dstPage = await rec.pdf.getPage(target.pageIndex + 1).catch(() => null)
     let scale = 1.25
     let rangeEndY: number | null = null
+    /** The text block's right edge, so the window never starts so far right
+     *  that it loses the end of the lines (the destination's x is the
+     *  entry's indent, not the block's edge) */
+    let blockRight: number | null = null
+    /** A citation's own entry (and a range's last one): the window is cut
+     *  to exactly these lines */
+    let entryRect: { top: number; bottom: number; x0: number; x1: number } | null = null
     if (dstPage) {
       const content = await dstPage.getTextContent().catch(() => null)
+      const pageWidth = (dstPage.view[2] ?? 612) - (dstPage.view[0] ?? 0)
+      const lines = content ? textLines(content.items) : []
       if (content) {
-        const pageWidth = (dstPage.view[2] ?? 612) - (dstPage.view[0] ?? 0)
-        const extent = textExtent(textLines(content.items), pageWidth)
+        const extent = textExtent(lines, pageWidth)
         scale = previewScale(extent.columnW, box.w)
+        blockRight = extent.x1
         // A two-column page: the window is one column wide, not two
         if (extent.twoColumn) box.w = Math.max(200, Math.min(box.w, Math.ceil(extent.columnW * scale) + 36))
       }
-      if (range && target.y !== null) {
+      if (target.kind === 'citation' && target.y !== null) {
         const siblings = await familySiblings(rec.pdf, target, dstPage)
-        rangeEndY = rangeEnd(
-          { x: target.x, y: target.y, n: destLabel(target.name) },
-          siblings,
-          range[1] - range[0] + 1
-        )
+        const label = destLabel(target.name)
+        const count = range ? range[1] - range[0] + 1 : 1
+        if (range) rangeEndY = rangeEnd({ x: target.x, y: target.y, n: label }, siblings, count)
+        const first = entryLines(lines, { x: target.x, y: target.y }, siblings, label, pageWidth)
+        const last =
+          range && rangeEndY !== null
+            ? entryLines(
+                lines,
+                { x: target.x, y: rangeEndY },
+                siblings,
+                label === null ? null : label + count - 1,
+                pageWidth
+              )
+            : []
+        entryRect = entryBox([...first, ...last])
+        // The entry's own width is what has to fit — a reference list's
+        // lines are often wider than the page's measured text block
+        if (entryRect) scale = previewScale(entryRect.x1 - entryRect.x0, box.w)
       }
     }
     if (mine !== seq.current) return
@@ -235,17 +284,38 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       vx = target.x === null ? null : px
       vy = target.y === null ? null : py
     }
-    if (range && target.y !== null && vy !== null) {
-      // Tall enough for every entry in the range: from the first to where
-      // the last one starts, plus a few lines of it. A range that runs past
-      // the page shows to the page's foot.
-      const lastY = rangeEndY ?? (img.viewport.viewBox[1] ?? 0)
-      const [, pyLast] = img.viewport.convertToViewportPoint(target.x ?? 0, lastY)
-      box.h = Math.max(box.h, Math.min(Math.round(window.innerHeight * 0.6), Math.ceil(pyLast - vy) + Math.round(52 * scale)))
+    const maxH = Math.round(window.innerHeight * 0.6)
+    let scroll: { left: number; top: number }
+    let entry = false
+    let entryFits = false
+    if (entryRect) {
+      // Cut to the entry: its lines, a little air, nothing of the neighbours
+      const [l, t] = img.viewport.convertToViewportPoint(entryRect.x0, entryRect.top)
+      const [r, b] = img.viewport.convertToViewportPoint(entryRect.x1, entryRect.bottom)
+      const need = Math.ceil(b - t) + 12
+      box.w = Math.min(box.w, Math.ceil(r - l) + 24)
+      box.h = Math.max(40, Math.min(need, maxH))
+      scroll = { left: Math.max(0, Math.floor(l) - 12), top: Math.max(0, Math.floor(t) - 6) }
+      entry = true
+      entryFits = need <= maxH
+    } else {
+      if (range && target.y !== null && vy !== null) {
+        // The entry could not be read off the page: a window tall enough for
+        // the range, from the first entry to where the last one starts plus
+        // a few lines of it; a range past the page shows to the page's foot
+        const lastY = rangeEndY ?? (img.viewport.viewBox[1] ?? 0)
+        const [, pyLast] = img.viewport.convertToViewportPoint(target.x ?? 0, lastY)
+        box.h = Math.max(box.h, Math.min(maxH, Math.ceil(pyLast - vy) + Math.round(52 * scale)))
+      }
+      // A page narrower than the window: the window narrows to it
+      box.w = Math.min(box.w, Math.ceil(img.w))
+      scroll = previewScroll(target.kind, vx, vy, box, { w: img.w, h: img.h }, captionAbove)
+      // …but never so far right that the lines' ends fall outside it
+      if (blockRight !== null) {
+        const [edge] = img.viewport.convertToViewportPoint(blockRight, 0)
+        scroll.left = Math.max(0, Math.min(scroll.left, Math.ceil(edge) + 12 - box.w))
+      }
     }
-    // A page narrower than the window: the window narrows to it
-    box.w = Math.min(box.w, Math.ceil(img.w))
-    const scroll = previewScroll(target.kind, vx, vy, box, { w: img.w, h: img.h }, captionAbove)
     const r = anchor.getBoundingClientRect()
     // Placed by its whole height: the page window plus the footer line
     const at = placePreview(r, pointerX, { w: box.w, h: box.h + FOOT_PX }, { w: window.innerWidth, h: window.innerHeight })
@@ -253,6 +323,7 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     pinnedRef.current = false
     draggedRef.current = false
     setPlaced(null)
+    setSize(null)
     setAbs(known ? { state: 'done', result: known } : { state: 'idle' })
     setOpen({
       anchor,
@@ -269,6 +340,8 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
       box,
       scale,
       range,
+      entry,
+      entryFits,
       at
     })
   }, [])
@@ -449,7 +522,7 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     const panel = panelRef.current
     const box = boxRef.current
     if (!open || !hasPanel || !panel || !box) return
-    const need = COMPACT_PAGE_PX + panel.scrollHeight + FOOT_PX
+    const need = pagePartHeight(open, true, window.innerHeight) + panel.scrollHeight + FOOT_PX
     const winH = window.innerHeight
     const left = box.getBoundingClientRect().left
     if (draggedRef.current) {
@@ -525,23 +598,25 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
     )
   }
 
-  const markTop = open.vy !== null && open.kind !== 'figure' && open.kind !== 'table' ? open.vy : null
+  const markTop =
+    open.vy !== null && !open.entry && open.kind !== 'figure' && open.kind !== 'table' ? open.vy : null
   // Before it is placed for an abstract (or dragged), the hover placement.
   // Opened above its link, the window is held by its BOTTOM, so the footer's
   // «Henter …» never moves it toward the citation.
   const winH = window.innerHeight
+  const width = size?.w ?? open.box.w
   const place: React.CSSProperties = placed
-    ? { left: placed.left, top: placed.top, width: open.box.w }
+    ? { left: placed.left, top: placed.top, width }
     : open.at.below
-      ? { left: open.at.left, top: open.at.top, width: open.box.w }
-      : { left: open.at.left, bottom: winH - (open.at.top + open.box.h + FOOT_PX), width: open.box.w }
-  const pageH = hasPanel ? Math.min(COMPACT_PAGE_PX, open.box.h) : open.box.h
+      ? { left: open.at.left, top: open.at.top, width }
+      : { left: open.at.left, bottom: winH - (open.at.top + open.box.h + FOOT_PX), width }
+  const pageH = size?.h ?? pagePartHeight(open, hasPanel, winH)
   const panelMax = placed?.height != null ? Math.max(80, placed.height - pageH - FOOT_PX) : undefined
   const canAsk = open.kind === 'citation' && open.target.y !== null && !open.range
   return (
     <div
       ref={boxRef}
-      className={`link-preview kind-${open.kind}`}
+      className={`link-preview kind-${open.kind}${open.entry && open.entryFits && !size ? ' is-entry' : ''}`}
       style={place}
       onPointerEnter={clearClose}
       onPointerLeave={(e) => {
@@ -570,7 +645,15 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
           )}
         </div>
       </div>
-      <AbstractBody ref={panelRef} abs={abs} onRetry={() => void askAbstract(open)} maxHeight={panelMax} />
+      <AbstractBody
+        ref={panelRef}
+        abs={abs}
+        onRetry={() => void askAbstract(open)}
+        maxHeight={panelMax}
+        // Its own cross: the abstract goes, the entry stays, the window keeps
+        // its place (it has been read in, so it stays open as before)
+        onClose={() => setAbs({ state: 'idle' })}
+      />
       <div className="link-preview-foot" {...footHandle}>
         <span>
           {t('linkPreview.page', { page: open.pageIndex + 1 })}
@@ -589,6 +672,7 @@ export default function LinkPreview({ hostRef, enabled, delayMs }: Props): React
         {abs.state === 'loading' && <span className="lpa-loading">{t('linkPreview.abstractLoading')}</span>}
         <AbstractSource abs={abs} />
       </div>
+      <span className="box-grip link-preview-grip" title={t('bubble.resizeTip')} {...gripProps} />
     </div>
   )
 }

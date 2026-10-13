@@ -63,8 +63,16 @@ const SOURCE_NAMES: Record<Exclude<CitationAbstract['source'], ''>, string> = {
  *  says so, so a wrong match can be seen for what it is. */
 export const AbstractBody = forwardRef<
   HTMLDivElement,
-  { abs: AbstractState; onRetry(): void; maxHeight?: number | undefined; className?: string }
->(function AbstractBody({ abs, onRetry, maxHeight, className }, ref) {
+  {
+    abs: AbstractState
+    onRetry(): void
+    maxHeight?: number | undefined
+    className?: string
+    /** A cross that removes the abstract alone — the link preview's panel
+     *  folds out under the entry and must be closable without the window */
+    onClose?: (() => void) | undefined
+  }
+>(function AbstractBody({ abs, onRetry, maxHeight, className, onClose }, ref) {
   if (abs.state !== 'done' && abs.state !== 'error') return null
   const result = abs.state === 'done' ? abs.result : null
   return (
@@ -74,6 +82,11 @@ export const AbstractBody = forwardRef<
       aria-live="polite"
       style={{ maxHeight }}
     >
+      {onClose && (
+        <button type="button" className="lpa-close" title={t('app.close')} aria-label={t('app.close')} onClick={onClose}>
+          ✕
+        </button>
+      )}
       {result ? (
         <>
           {result.title && <div className="lpa-title">{result.title}</div>}

@@ -433,6 +433,35 @@ export function entryFromLines(
   label: number | null,
   pageWidth: number
 ): string {
+  return entryLines(lines, dest, siblings, label, pageWidth)
+    .map((l) => l.text)
+    .join('\n')
+}
+
+/** The box an entry's lines occupy, in PDF user space: a line's ascenders
+ *  reach about 0.95 of its size above the baseline and its descenders a
+ *  third below. Null for no lines. The window onto a citation is cut to
+ *  exactly this (Emil, 2026-10-13: «enten burde kun referansen dukke opp»). */
+export function entryBox(
+  lines: readonly TextLine[]
+): { top: number; bottom: number; x0: number; x1: number } | null {
+  if (lines.length === 0) return null
+  return {
+    top: Math.max(...lines.map((l) => l.y + l.size * 0.95)),
+    bottom: Math.min(...lines.map((l) => l.y - l.size * 0.35)),
+    x0: Math.min(...lines.map((l) => l.x0)),
+    x1: Math.max(...lines.map((l) => l.x1))
+  }
+}
+
+/** The entry's lines themselves (entryFromLines is their text) */
+export function entryLines(
+  lines: readonly TextLine[],
+  dest: DestPoint,
+  siblings: readonly DestPoint[],
+  label: number | null,
+  pageWidth: number
+): TextLine[] {
   const twoColumn = isTwoColumn(lines, pageWidth)
   const rightColumnLeft = Math.min(Infinity, ...lines.filter((l) => l.x0 > pageWidth * 0.45).map((l) => l.x0))
 
@@ -514,7 +543,7 @@ export function entryFromLines(
       }
     }
   }
-  if (start < 0) return ''
+  if (start < 0) return []
 
   const first = inCol[start]!
   const firstLabel = lineLabel(first.text)
@@ -557,7 +586,7 @@ export function entryFromLines(
     }
     out.push(l)
   }
-  return out.map((l) => l.text).join('\n')
+  return out
 }
 
 /** Every document's named destinations, read once — a paper can carry

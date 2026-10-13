@@ -3128,13 +3128,16 @@ html.pen-near .draw-layer {
   /* The wheel at the window's end must not scroll the page under it */
   overscroll-behavior: contain;
   cursor: pointer;
-  /* The wheel still scrolls it, but no bar: the window is a glimpse of the
-     page, not a second document (Emil, 2026-10-10) */
-  scrollbar-width: none;
+  /* A bar, but an anonymous one: thin and faint, so that the window can be
+     seen to go on without reading as a second document (Emil, 2026-10-13 —
+     «vis et anonymt rullefelt, men det skal ikke distrahere») */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
 }
 
-.link-preview-scroll::-webkit-scrollbar {
-  display: none;
+/* A citation cut to its entry: nothing beyond it to scroll to */
+.link-preview.is-entry .link-preview-scroll {
+  overflow: hidden;
 }
 
 .link-preview-content {
@@ -3230,9 +3233,11 @@ html.pen-near .draw-layer {
 }
 
 .link-preview-abstract {
+  position: relative;
   overflow: hidden auto;
   overscroll-behavior: contain;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
   padding: 10px 14px 4px;
   border-top: 1px solid var(--border);
   font-size: 13px;
@@ -3241,8 +3246,31 @@ html.pen-near .draw-layer {
   user-select: text;
 }
 
-.link-preview-abstract::-webkit-scrollbar {
-  display: none;
+/* The abstract's own cross (the link preview's panel): the abstract goes,
+   the entry and the window stay */
+.lpa-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.lpa-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.link-preview-abstract .lpa-title {
+  padding-right: 24px;
 }
 
 .lpa-title {
@@ -8743,4 +8771,20 @@ html.touch-ui .keys-reset-one {
   margin-top: 6px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
+}
+
+/* The delay pills' name: a word, muted, in the row itself */
+.link-preview-delay-caption {
+  align-self: center;
+  margin-right: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* The link preview's corner grip sits over the footer's corner */
+.link-preview-grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
 }

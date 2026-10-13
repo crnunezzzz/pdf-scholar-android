@@ -194,6 +194,28 @@ const check = (label, cond, detail = '') => {
   check('order does not matter', M.rangeEnd(labelled[0], shuffled, 3) === 700 - 80)
 }
 
+{
+  // The box the window is cut to: ascenders above the first baseline,
+  // descenders below the last, the widest line's edges
+  const entry = [
+    { x0: 72, x1: 540, y: 700, size: 10, text: 'Stigler, G. J. (1961). The economics of information.' },
+    { x0: 90, x1: 300, y: 688, size: 10, text: '69(3):213–225.' }
+  ]
+  const b = M.entryBox(entry)
+  check('entry box: top above the first line, bottom below the last', b.top === 709.5 && b.bottom === 684.5, JSON.stringify(b))
+  check('entry box: the widest line sets the sides', b.x0 === 72 && b.x1 === 540)
+  check('entry box: nothing → null', M.entryBox([]) === null)
+  // entryLines is what entryFromLines reads its text from
+  const lines = [
+    { x0: 72, x1: 540, y: 700, size: 10, text: 'Smith, A. (2001). A title.' },
+    { x0: 90, x1: 300, y: 688, size: 10, text: 'J. Econ., 1(1):1–2.' },
+    { x0: 72, x1: 540, y: 676, size: 10, text: 'Jones, B. (2002). Another title.' }
+  ]
+  const picked = M.entryLines(lines, { x: 72, y: 710 }, [{ x: 72, y: 686 }], null, 612)
+  check('entryLines: the entry\'s own lines', picked.length === 2 && picked[0].text.startsWith('Smith') && picked[1].text.startsWith('J. Econ'), JSON.stringify(picked.map((l) => l.text)))
+  check('entryFromLines is their text', M.entryFromLines(lines, { x: 72, y: 710 }, [{ x: 72, y: 686 }], null, 612) === 'Smith, A. (2001). A title.\nJ. Econ., 1(1):1–2.')
+}
+
 // -------------------------------------- tier 1b: the reference-list entry
 {
   const items = [

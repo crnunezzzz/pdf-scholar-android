@@ -374,7 +374,8 @@ export const zh: Dict = {
   'settings.linkPreview': '链接预览',
   'settings.linkPreviewTip':
     '将指针停在引用、图或公式的引用上，即可查看链接指向的内容，而无需离开当前页面。触摸屏上长按。',
-  'settings.linkPreviewDelay': '预览前的延迟',
+  'settings.linkPreviewDelay': '延迟',
+  'settings.linkPreviewDelayTip': '指针在链接上停留多久后打开窗口：150、350 或 700 毫秒',
   'settings.linkPreviewDelay.short': '短',
   'settings.linkPreviewDelay.medium': '中',
   'settings.linkPreviewDelay.long': '长',

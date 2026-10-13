@@ -2529,8 +2529,11 @@ export default function Toolbar({
                 className="lang-options link-preview-delays"
                 role="radiogroup"
                 aria-label={t('settings.linkPreviewDelay')}
-                title={t('settings.linkPreviewDelay')}
+                title={t('settings.linkPreviewDelayTip')}
               >
+                {/* Named: three bare pills under a checkbox read as sizes, not
+                    as the wait before the window opens (Emil, 2026-10-13) */}
+                <span className="link-preview-delay-caption">{t('settings.linkPreviewDelay')}</span>
                 {(['short', 'medium', 'long'] as const).map((d) => (
                   <button
                     key={d}
