@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { zoteroKeyFromPath } from '../../../shared/zotero'
-import { bridge, isElectron } from '../bridge'
+import { bridge, isAndroid, isElectron } from '../bridge'
 import { TAB_DRAG_MIME } from '../drag-types'
 import { t, useLang } from '../i18n'
 import { isMac } from '../platform'
@@ -271,9 +271,12 @@ export default function TabBar({
       <button className="tab-new" onClick={onNewTab} title={withShortcut(t('tabs.new'), 'file.open')}>
         +
       </button>
-      <button className="tab-new-window" onClick={onNewWindow} title={withShortcut(t('tabs.newWindow'), 'window.new')}>
-        ⧉
-      </button>
+      {/* One window on Android: the button would do nothing there */}
+      {!isAndroid && (
+        <button className="tab-new-window" onClick={onNewWindow} title={withShortcut(t('tabs.newWindow'), 'window.new')}>
+          ⧉
+        </button>
+      )}
       {/* Every open tab as a list. The strip compresses titles as it fills up,
           and past a handful they stop being readable — this is the browsers'
           answer to the same problem, in the same place. Only offered once the
@@ -349,24 +352,30 @@ export default function TabBar({
           >
             {t('tabs.reload')}
           </button>
-          <button
-            className="menu-item"
-            onClick={() => {
-              onMoveToNewWindow(menu.tab.id, menu.tab.path)
-              setMenu(null)
-            }}
-          >
-            {t('tabs.moveToNewWindow')}
-          </button>
-          <button
-            className="menu-item"
-            onClick={() => {
-              onOpenInNewWindow(menu.tab.path)
-              setMenu(null)
-            }}
-          >
-            {t('tabs.openInNewWindow')}
-          </button>
+          {/* Android has one window and no file manager to reveal a file in:
+              these three would do nothing there (or, moving, lose the tab) */}
+          {!isAndroid && (
+            <>
+              <button
+                className="menu-item"
+                onClick={() => {
+                  onMoveToNewWindow(menu.tab.id, menu.tab.path)
+                  setMenu(null)
+                }}
+              >
+                {t('tabs.moveToNewWindow')}
+              </button>
+              <button
+                className="menu-item"
+                onClick={() => {
+                  onOpenInNewWindow(menu.tab.path)
+                  setMenu(null)
+                }}
+              >
+                {t('tabs.openInNewWindow')}
+              </button>
+            </>
+          )}
           {/* Two-document split: this file beside the ACTIVE tab's document
               (tabs are unique per path, so another tab is always another
               file). On the active tab itself: the document in both columns —
@@ -383,15 +392,17 @@ export default function TabBar({
               {t('tabs.openInSplit')}
             </button>
           )}
-          <button
-            className="menu-item"
-            onClick={() => {
-              onShowInFolder(menu.tab.path)
-              setMenu(null)
-            }}
-          >
-            {t('tabs.showInFolder')}
-          </button>
+          {!isAndroid && (
+            <button
+              className="menu-item"
+              onClick={() => {
+                onShowInFolder(menu.tab.path)
+                setMenu(null)
+              }}
+            >
+              {t('tabs.showInFolder')}
+            </button>
+          )}
           {menuZotero && (
             <button
               className="menu-item"

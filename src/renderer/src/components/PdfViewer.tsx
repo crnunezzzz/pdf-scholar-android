@@ -7240,7 +7240,11 @@ export default function PdfViewer({
     >
       <div
         className={`toolbar-wrap${toolbarVisible ? '' : ' tucked'}`}
-        onMouseLeave={() => !toolbarPinned && setToolbarPeek(false)}
+        // Hover only, like the reveal: after a tap, Chromium sends mouse-type
+        // boundary events from the tap's point as the layout moves under it,
+        // and the toolbar a swipe had just revealed got a «leave» and tucked
+        // again at once (a tablet in split view, after tapping a menu item)
+        onPointerLeave={(e) => !toolbarPinned && isHover(e) && setToolbarPeek(false)}
       >
         <Toolbar
           page={currentPage}

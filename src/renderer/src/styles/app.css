@@ -1444,6 +1444,9 @@ html.touch-ui .reveal-zone {
   align-items: center;
   gap: 5px;
   color: var(--text-secondary);
+  /* «/ 6» on one line: a crowded toolbar (the split's column switcher in a
+     1280 px window) squeezed it onto two before folding a button away */
+  white-space: nowrap;
 }
 
 .page-indicator input {
@@ -8208,6 +8211,16 @@ html.touch-ui .toolbar {
   height: 54px;
 }
 
+/* The split in a narrow window (a tablet held upright, 800 px): the column
+   switcher and «swap sides» join a core that folding cannot shrink, and «…»
+   went off the right edge. The zoom
+   steps give way (pinch, the percentage and the layout menu remain). */
+@media (max-width: 900px) {
+  .toolbar-center.is-split .center-cluster > .tb-btn {
+    display: none;
+  }
+}
+
 /* A phone held upright (the Android app, docs/ANDROID.md). Folding buttons
    into "…" (Toolbar.tsx, measureOverflow) stops at the irreducible core, and
    at ~400 px that core alone was wider than the screen — the "…" and the gear
@@ -8234,7 +8247,6 @@ html.touch-ui .toolbar {
   }
   .page-indicator {
     gap: 3px;
-    white-space: nowrap;
   }
   .page-indicator input {
     width: 34px;
@@ -8242,11 +8254,29 @@ html.touch-ui .toolbar {
   .zoom-label {
     min-width: 44px;
   }
+  /* Split on a phone: the column switcher joins the core, so «swap sides»,
+     the column's own close (the split also closes from «…»), the page count,
+     the zoom value and the save menu's chevron (Save itself stays) give way
+     — or the core overran its own buttons */
+  .toolbar-center.is-split > .tb-btn,
+  .toolbar-center.is-split .page-indicator > span,
+  .toolbar-center.is-split .zoom-label,
+  .toolbar-center.is-split .cluster-close,
+  .toolbar:has(.toolbar-center.is-split) .tb-split > .tb-chevron {
+    display: none;
+  }
+  /* Finger-sized still (34 px, Android's own 32 dp floor is below it), but
+     the 38 px of touch-ui left the core 12 px over at 412 px with tabs open */
+  html.touch-ui .tb-btn,
+  html.touch-ui .tb-chevron,
+  .tb-btn {
+    min-width: 34px;
+  }
 }
 
 /* The narrowest phones (360 px class): still one control too many. The zoom
    value lives in the layout menu beside it, the page count in the page pill,
-   and the buttons give up a few pixels each. */
+   and the buttons give up a few more pixels each. */
 @media (max-width: 400px) {
   .center-cluster > .zoom-label,
   .page-indicator > span {
@@ -8255,7 +8285,7 @@ html.touch-ui .toolbar {
   html.touch-ui .tb-btn,
   html.touch-ui .tb-chevron,
   .tb-btn {
-    min-width: 34px;
+    min-width: 32px;
   }
 }
 
