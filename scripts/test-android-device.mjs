@@ -216,8 +216,16 @@ await touch([0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => ({ x: top.x, y: top.y + i * 1
 await sleep(600)
 check('fullscreen: a swipe down from the top shows the toolbar', await ev(`!document.querySelector('${ACTIVE} .toolbar-wrap.tucked')`))
 shot('4-fullscreen-toolbar-revealed')
+// What could swallow the first Back: a focused field with the keyboard up
+// (Android's first Back only closes the keyboard — the same on a phone)
+const focused = await ev(`document.activeElement ? document.activeElement.tagName + '.' + document.activeElement.className : 'none'`)
+const imeShown = /mInputShown=true/.test(adb('shell', 'dumpsys', 'input_method'))
+console.log(`before Back: focus ${focused}, keyboard ${imeShown ? 'shown' : 'hidden'}`)
+adb('logcat', '-c')
 adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
 await waitFor(`window.innerHeight === ${heightBefore}`, 6000)
+console.log('native:', adb('logcat', '-d', '-s', 'PdfFiles:I').split('\n').filter((l) => /PdfFiles/.test(l)).map((l) => l.replace(/^.*PdfFiles\s*:\s*/, '')).join(' | ') || '(nothing)')
+console.log('after Back: resumed', /mResumedActivity.*pdfscholar|topResumedActivity.*pdfscholar/.test(adb('shell', 'dumpsys', 'activity', 'activities')), ', page', await ev('document.visibilityState'), ', fullscreen class', await ev(`document.querySelector('.tab-bar').className`))
 const heightAfter = await ev('window.innerHeight')
 if (heightAfter !== heightBefore) {
   // What the window manager thinks the bars are doing, for the log

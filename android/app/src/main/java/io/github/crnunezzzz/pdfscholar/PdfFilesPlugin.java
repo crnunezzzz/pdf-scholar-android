@@ -17,6 +17,7 @@ import android.print.PrintDocumentInfo;
 import android.print.PrintManager;
 import android.provider.OpenableColumns;
 import android.util.Base64;
+import android.util.Log;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.FileProvider;
@@ -51,6 +52,8 @@ import java.util.concurrent.Executors;
 @CapacitorPlugin(name = "PdfFiles")
 public class PdfFilesPlugin extends Plugin {
 
+    private static final String TAG = "PdfFiles";
+
     /** The document an «Open with» launch carried, until the renderer asks */
     private String pendingUri;
 
@@ -82,6 +85,7 @@ public class PdfFilesPlugin extends Plugin {
                 new OnBackPressedCallback(true) {
                     @Override
                     public void handleOnBackPressed() {
+                        Log.i(TAG, "back pressed, immersive=" + immersive);
                         if (immersive) {
                             applyImmersive(false);
                             notifyListeners("fullscreenExit", new JSObject());
@@ -143,6 +147,7 @@ public class PdfFilesPlugin extends Plugin {
     /** Status and navigation bars away; an edge swipe shows them over the page
      *  for a moment and they hide again on their own (sticky immersive) */
     private void applyImmersive(boolean on) {
+        Log.i(TAG, "immersive " + on);
         immersive = on;
         android.view.Window window = getActivity().getWindow();
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
