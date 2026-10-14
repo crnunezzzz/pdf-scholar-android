@@ -670,6 +670,7 @@ export const zh: Dict = {
     '工具栏已取消固定——它会自动隐藏；将指针悬停在顶部边缘可显示',
   'viewer.resizerTip': '拖动调整大小——双击重置',
   'viewer.fullscreenToast': '全屏——按 Esc 或 F11 退出',
+  'viewer.fullscreenToastTouch': '全屏——从顶部向下轻扫显示工具栏，按返回键退出',
   'viewer.presentToast': '演示模式——方向键或单击翻页，Esc 退出',
   'viewer.rotatedToolsOff': '页面旋转时绘制工具不可用',
   'present.prev': '上一页（←）',

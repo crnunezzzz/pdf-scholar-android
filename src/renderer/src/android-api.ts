@@ -89,7 +89,12 @@ interface PdfFilesPlugin {
   openUrl(opts: { url: string }): Promise<void>
   /** The document the app was launched to open (ACTION_VIEW), handed out once */
   takePendingUri(): Promise<{ uri?: string }>
+  /** Immersive mode: status and navigation bars hidden, a swipe from the
+   *  edge shows them for a moment and they hide again by themselves */
+  setImmersive(opts: { on: boolean }): Promise<void>
   addListener(event: 'openUri', cb: (e: { uri: string }) => void): Promise<{ remove(): Promise<void> }>
+  /** The back button ended immersive mode */
+  addListener(event: 'fullscreenExit', cb: () => void): Promise<{ remove(): Promise<void> }>
 }
 
 const PdfFiles = registerPlugin<PdfFilesPlugin>('PdfFiles')
@@ -209,9 +214,18 @@ export function createAndroidApi(base: PdfxApi): PdfxApi {
    *  read-only): saving one goes through «Save as» instead */
   const readOnly = new Set<string>()
 
+  const notifyFullscreen = (on: boolean): void => {
+    // Never synchronously: setFullscreen is called from inside a React state
+    // updater, where another component's setState must not run
+    queueMicrotask(() => {
+      for (const cb of fullscreenListeners) cb(on)
+    })
+  }
+
   void PdfFiles.addListener('openUri', ({ uri }) => {
     for (const cb of openListeners) cb(uri)
-  })
+  }).catch(() => {})
+  void PdfFiles.addListener('fullscreenExit', () => notifyFullscreen(false)).catch(() => {})
 
   const payloadFrom = async (res: PickResult): Promise<FilePayload | FileError | null> => {
     if (res.cancelled || !res.uri || !res.file) return null
@@ -240,8 +254,8 @@ export function createAndroidApi(base: PdfxApi): PdfxApi {
   }
 
   const setFullscreen = (on: boolean): void => {
-    void (on ? SystemBars.hide() : SystemBars.show()).catch(() => {})
-    for (const cb of fullscreenListeners) cb(on)
+    void PdfFiles.setImmersive({ on }).catch(() => {})
+    notifyFullscreen(on)
   }
 
   return {

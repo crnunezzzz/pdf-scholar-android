@@ -596,7 +596,7 @@ export default function PdfViewer({
   const [error, setError] = useState<string | null>(null)
   /** Edge-style toolbar auto-hide. Pinned (default) = always visible; unpinned
    *  = tucks away and reveals on top-edge hover. Persisted across sessions. */
-  const [toolbarPinned, setToolbarPinned] = useState(loadToolbarPinned)
+  const [toolbarPinnedPref, setToolbarPinned] = useState(loadToolbarPinned)
   const [toolbarPeek, setToolbarPeek] = useState(false)
   /** Margin view: notes + annotation comments as always-visible cards in a
    *  column beside each page (both panes). The gutter it needs is reserved
@@ -671,6 +671,16 @@ export default function PdfViewer({
   const fitModeRef = useRef(fitMode)
   fitModeRef.current = fitMode
   const [fullscreen, setFullscreen] = useState(false)
+  /** The toolbar as it shows now. On Android, fullscreen is the phone's
+   *  reading mode — the page and nothing else — so the toolbar tucks away
+   *  like an unpinned one (a swipe down from the top brings it back) while
+   *  the reader's own pin choice waits for fullscreen to end. The desktop
+   *  keeps the two independent. */
+  const toolbarPinned = toolbarPinnedPref && !(isAndroid && fullscreen)
+  const fullscreenRef = useRef(fullscreen)
+  fullscreenRef.current = fullscreen
+  /** Set where toggleFullscreen is defined (below togglePin, which calls it) */
+  const toggleFullscreenRef = useRef<() => void>(() => {})
   const [toast, setToast] = useState<string | null>(null)
   const [menu, setMenu] = useState<MenuState | null>(null)
   /** «Sammendrag» chosen in the selection menu: the selected reference's text
@@ -2294,14 +2304,36 @@ export default function PdfViewer({
   // above the viewer's top edge, hovering it — or just shoving the pointer to
   // the very top of the screen — reveals the toolbar. Retract stays with the
   // toolbar-wrap's onMouseLeave so open dropdowns are never yanked away.
+  // A finger never hovers: after a tap Chromium sends compatibility mouse
+  // events at the tap's point — and, when the tap changed the layout under
+  // it, mouse-type pointerover/enter boundary events too. Tapping the unpin or
+  // fullscreen button sat exactly where the reveal strip appears, so the
+  // toolbar came back the instant it tucked, for good. Anything mouse-like
+  // within a beat of a touch is that echo, not a hover; a finger has the
+  // swipe down from the top (the touch effect below).
+  const lastTouchRef = useRef(0)
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') lastTouchRef.current = performance.now()
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('pointerup', onDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointerup', onDown, true)
+    }
+  }, [])
+  const isHover = (e: PointerEvent | React.PointerEvent): boolean =>
+    e.pointerType !== 'touch' && performance.now() - lastTouchRef.current > 1000
   useEffect(() => {
     if (!active || !immersive) return
-    const onMove = (e: MouseEvent): void => {
+    const onMove = (e: PointerEvent): void => {
+      if (!isHover(e)) return
       const top = viewerRootRef.current?.getBoundingClientRect().top ?? 0
       if (e.clientY <= top + 14) setToolbarPeek(true)
     }
-    window.addEventListener('mousemove', onMove)
-    return () => window.removeEventListener('mousemove', onMove)
+    window.addEventListener('pointermove', onMove)
+    return () => window.removeEventListener('pointermove', onMove)
   }, [active, immersive])
 
   // Edge-rail handles fade in when the pointer nears a side edge. This is a
@@ -2702,6 +2734,10 @@ export default function PdfViewer({
     const el = containerRef.current
     if (!el || !active) return
     const EDGE = 24
+    // Android fullscreen: the outermost pixels of the top edge belong to the
+    // system (a swipe there shows the status bar), so the band that reveals
+    // the toolbar reaches further down
+    const EDGE_TOP = isAndroid ? 48 : EDGE
     const pinch = { active: false, startDist: 0 }
     const swipe = { edge: null as 'left' | 'right' | 'top' | null, x: 0, y: 0, done: false }
 
@@ -2774,7 +2810,7 @@ export default function PdfViewer({
       const fromLeft = t.clientX - rect.left
       const fromRight = rect.right - t.clientX
       const fromTop = t.clientY - rect.top
-      if (immersiveRef.current && !toolbarPinned && fromTop <= EDGE) {
+      if (immersiveRef.current && !toolbarPinned && fromTop <= EDGE_TOP) {
         swipe.edge = 'top'
       } else if (fromLeft <= EDGE) {
         swipe.edge = 'left'
@@ -5804,6 +5840,12 @@ export default function PdfViewer({
   // the whole chrome gets out of the way in one gesture.
   const preUnpinPanelsRef = useRef<{ toc: boolean; ai: boolean } | null>(null)
   const togglePin = useCallback(() => {
+    // Android fullscreen holds the toolbar tucked whatever the pin says:
+    // asking for it pinned there means leaving fullscreen
+    if (isAndroid && fullscreenRef.current) {
+      toggleFullscreenRef.current()
+      return
+    }
     setToolbarPinned((pinned) => {
       const next = !pinned
       saveToolbarPinned(next)
@@ -5881,10 +5923,23 @@ export default function PdfViewer({
     setFullscreen((f) => {
       const next = !f
       bridge.setFullscreen(next)
-      if (next) showToast(t('viewer.fullscreenToast'))
+      if (next) showToast(t(isAndroid ? 'viewer.fullscreenToastTouch' : 'viewer.fullscreenToast'))
+      if (next && isAndroid) setToolbarPeek(false)
       return next
     })
   }, [showToast])
+  toggleFullscreenRef.current = toggleFullscreen
+
+  // Fullscreen can end from outside the toolbar (Android's back button, the
+  // browser's own Esc): follow the platform so the next tap does not have to
+  // undo a state that is already gone
+  useEffect(
+    () =>
+      bridge.onFullScreen((fs) => {
+        if (!fs) setFullscreen(false)
+      }),
+    []
+  )
 
   // Presentation mode: a self-contained fullscreen slideshow overlay. Entering
   // takes the window into OS fullscreen (if it wasn't already) so nothing but
@@ -7336,7 +7391,13 @@ export default function PdfViewer({
       {/* Tucked-toolbar reveal: mouse hovers this top hot-zone; touch swipes
           down from the top edge (handled in the touch effect) — no permanent
           on-screen affordance. */}
-      {immersive && <div className="reveal-zone" onMouseEnter={() => setToolbarPeek(true)} />}
+      {/* Hover only — not the echo of a tap (isHover, above) */}
+      {immersive && (
+        <div
+          className="reveal-zone"
+          onPointerEnter={(e) => isHover(e) && setToolbarPeek(true)}
+        />
+      )}
 
       {/* Edge rails — pointer near an edge fades the HANDLE in (window-level
           hint, no interactive strip: the pages scrollbar at the right edge

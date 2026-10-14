@@ -20,6 +20,9 @@ import android.util.Base64;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.FileProvider;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -51,6 +54,9 @@ public class PdfFilesPlugin extends Plugin {
     /** The document an «Open with» launch carried, until the renderer asks */
     private String pendingUri;
 
+    /** The reader asked for fullscreen (immersive mode) */
+    private boolean immersive = false;
+
     /** File copies run off the UI thread: an activity result arrives on it */
     private final ExecutorService io = Executors.newSingleThreadExecutor();
 
@@ -66,8 +72,9 @@ public class PdfFilesPlugin extends Plugin {
             // Handled: a recreated activity must not open it a second time
             launch.setAction(Intent.ACTION_MAIN);
         }
-        // Back from the reader leaves the app running, tabs and all, the way
-        // the home button does — rather than finishing the activity
+        // Back leaves fullscreen first. Otherwise it leaves the app running,
+        // tabs and all, the way the home button does — rather than finishing
+        // the activity
         getActivity()
             .getOnBackPressedDispatcher()
             .addCallback(
@@ -75,10 +82,23 @@ public class PdfFilesPlugin extends Plugin {
                 new OnBackPressedCallback(true) {
                     @Override
                     public void handleOnBackPressed() {
+                        if (immersive) {
+                            applyImmersive(false);
+                            notifyListeners("fullscreenExit", new JSObject());
+                            return;
+                        }
                         getActivity().moveTaskToBack(true);
                     }
                 }
             );
+    }
+
+    /** Coming back to the app (from home, a picker, the share sheet) can bring
+     *  the bars back: fullscreen is the reader's choice until they leave it */
+    @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        if (immersive) applyImmersive(true);
     }
 
     @Override
@@ -107,6 +127,31 @@ public class PdfFilesPlugin extends Plugin {
         if (pendingUri != null) ret.put("uri", pendingUri);
         pendingUri = null;
         call.resolve(ret);
+    }
+
+    // ---------- Fullscreen ----------
+
+    @PluginMethod
+    public void setImmersive(PluginCall call) {
+        boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        getActivity().runOnUiThread(() -> {
+            applyImmersive(on);
+            call.resolve();
+        });
+    }
+
+    /** Status and navigation bars away; an edge swipe shows them over the page
+     *  for a moment and they hide again on their own (sticky immersive) */
+    private void applyImmersive(boolean on) {
+        immersive = on;
+        android.view.Window window = getActivity().getWindow();
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
+        if (on) {
+            controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            controller.hide(WindowInsetsCompat.Type.systemBars());
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars());
+        }
     }
 
     // ---------- Reading ----------

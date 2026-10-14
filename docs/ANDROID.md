@@ -48,10 +48,17 @@ shared renderer; only the platform layer is new. Tier and divergences:
   `https://localhost`). A provider reached that way must answer CORS; one that
   does not fails here although it works on the desktop. Which do has not been
   checked on a device yet — `npm run test:live` covers the desktop only.
-- **Back button** sends the app to the background (tabs stay as they were);
-  the session restores the tab strip after the app is closed.
-- **Fullscreen** is Android's immersive mode; the status bar's icons follow
-  the reading theme.
+- **Fullscreen** (the ⤢ button, always in the toolbar on Android, or F) is
+  the phone's page-only view: Android's sticky immersive mode hides the
+  status and navigation bars, the tab strip goes, and the toolbar tucks away
+  whatever its pin says. A swipe down from the top (within 48 px — the very
+  edge belongs to the system's own bars) brings the toolbar back for a few
+  seconds; the same button, or Back, leaves. Returning to the app keeps it
+  fullscreen.
+- **Back button** leaves fullscreen first; otherwise it sends the app to the
+  background (tabs stay as they were). The session restores the tab strip
+  after the app is closed.
+- The status bar's icons follow the reading theme.
 
 ## Build locally
 

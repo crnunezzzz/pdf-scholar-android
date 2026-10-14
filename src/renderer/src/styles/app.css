@@ -1278,6 +1278,12 @@ button {
   z-index: 29;
 }
 
+/* A finger never hovers, and the strip sat on top of the pages' container —
+   it swallowed the start of the swipe down that reveals the toolbar by touch */
+html.touch-ui .reveal-zone {
+  pointer-events: none;
+}
+
 /* ---- Edge rails: the strip is a pure positioning container and NEVER takes
    pointer events (the pages scrollbar lives at the right edge and must stay
    draggable). Nearing an edge fades the handle in (.hint, set from a window
@@ -8208,8 +8214,14 @@ html.touch-ui .toolbar {
    sat off its right edge, out of reach. So the core itself tightens here: no
    dividers, no zoom steps (pinch zooms, the percentage opens the exact value,
    the layout menu has the presets and both fits) and a narrower page field.
-   Nothing below this width exists on the desktop reference. */
+   The sidebar button goes too: its edge handle and the swipe in from the
+   left are always there under touch-ui, and the room is the fullscreen
+   button's, which Android keeps inline. Nothing below this width exists on
+   the desktop reference. */
 @media (max-width: 600px) {
+  .toolbar > .toolbar-group:first-child > .tb-btn:nth-of-type(2) {
+    display: none;
+  }
   .toolbar {
     gap: 2px;
     padding: 0 4px;
@@ -8232,13 +8244,12 @@ html.touch-ui .toolbar {
   }
 }
 
-/* The narrowest phones (360 px class): still one control too many. The
-   sidebar has its edge handle and swipe (always visible under touch-ui), the
-   zoom value lives in the layout menu beside it, and the buttons give up a
-   few pixels each. */
+/* The narrowest phones (360 px class): still one control too many. The zoom
+   value lives in the layout menu beside it, the page count in the page pill,
+   and the buttons give up a few pixels each. */
 @media (max-width: 400px) {
-  .toolbar > .toolbar-group:first-child > .tb-btn:nth-of-type(2),
-  .center-cluster > .zoom-label {
+  .center-cluster > .zoom-label,
+  .page-indicator > span {
     display: none;
   }
   html.touch-ui .tb-btn,

@@ -601,7 +601,8 @@ the owner. It is held to the divergences below (31) and nothing else.
     through «Save as». pdf.js is its LEGACY build there (Android System
     WebView lags the desktop Chromium). Below 600 px the toolbar's core
     tightens (`app.css`, «A phone held upright») — no desktop window is that
-    narrow.
+    narrow. Fullscreen there also tucks the toolbar (the desktop keeps the two
+    independent), its button never folds into «…», and Back leaves it.
 
 ## Maintenance rules
 

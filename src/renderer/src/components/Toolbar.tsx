@@ -41,7 +41,7 @@ import {
   NIGHT_TONES,
   TUNE_RANGE
 } from '../theme-tune'
-import { bridge, isElectron, isExtension } from '../bridge'
+import { bridge, isAndroid, isElectron, isExtension } from '../bridge'
 import { setWebTakeover, webTakeoverEnabled } from '../extension-takeover'
 import {
   annotTypeLabel,
@@ -1129,7 +1129,11 @@ export default function Toolbar({
     { key: 'marker', icon: <IconMarker size={15} />, label: t('tb.marker'), onClick: () => onToolSelect(activeTool === 'marker' ? null : 'marker'), active: activeTool === 'marker', opts: 'marker', disabled: toolsLocked },
     { key: 'pen', icon: <IconPen size={15} />, label: t('tb.pen'), onClick: () => onToolSelect(activeTool === 'pen' ? null : 'pen'), active: activeTool === 'pen', opts: 'pen', disabled: toolsLocked },
     { key: 'present', icon: <IconPresent size={15} />, label: t('tb.present'), onClick: onPresent },
-    { key: 'fullscreen', icon: <IconFullscreen size={15} />, label: t('tb.fullscreen'), onClick: onToggleFullscreen },
+    // On Android the fullscreen button never folds: it is the phone's way into
+    // (and, from the swiped-down toolbar, out of) the page-only view
+    ...(isAndroid
+      ? []
+      : [{ key: 'fullscreen', icon: <IconFullscreen size={15} />, label: t('tb.fullscreen'), onClick: onToggleFullscreen }]),
     { key: 'redo', icon: <IconRedo size={15} />, label: t('tb.redo'), onClick: onRedo, disabled: !canRedo },
     { key: 'undo', icon: <IconUndo size={15} />, label: t('tb.undo'), onClick: onUndo, disabled: !canUndo },
     { key: 'forward', icon: <IconArrowRight size={15} />, label: t('tb.forward'), onClick: onNavForward, disabled: !canNavForward },
