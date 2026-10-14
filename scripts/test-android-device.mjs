@@ -221,7 +221,10 @@ shot('4-fullscreen-toolbar-revealed')
 const focused = await ev(`document.activeElement ? document.activeElement.tagName + '.' + document.activeElement.className : 'none'`)
 const imeShown = /mInputShown=true/.test(adb('shell', 'dumpsys', 'input_method'))
 console.log(`before Back: focus ${focused}, keyboard ${imeShown ? 'shown' : 'hidden'}`)
-adb('logcat', '-c')
+// Which window holds the key focus: a system overlay (the one-time «viewing
+// full screen» notice) would take the Back key before the app ever sees it
+const focusLines = () => adb('shell', 'dumpsys', 'window').split('\n').filter((l) => /mCurrentFocus|mFocusedApp|mFocusedWindow/.test(l)).map((l) => l.trim()).join(' ; ')
+console.log('window focus:', focusLines())
 adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
 await waitFor(`window.innerHeight === ${heightBefore}`, 6000)
 console.log('native:', adb('logcat', '-d', '-s', 'PdfFiles:I').split('\n').filter((l) => /PdfFiles/.test(l)).map((l) => l.replace(/^.*PdfFiles\s*:\s*/, '')).join(' | ') || '(nothing)')
@@ -232,6 +235,14 @@ if (heightAfter !== heightBefore) {
   console.log(adb('shell', 'dumpsys', 'window', 'windows').split('\n').filter((l) => /requestedVisib|mRequestedVisibleTypes|InsetsSource.*(statusBars|navigationBars|tappableElement).*visible/i.test(l)).slice(0, 12).join('\n'))
 }
 check('Back leaves fullscreen: system bars back', heightAfter === heightBefore, `${heightAfter} px`)
+if (heightAfter !== heightBefore) {
+  // An experiment for the log, not a check: does a SECOND Back get through
+  // (the first one spent on a system overlay)?
+  console.log('window focus after Back:', focusLines())
+  adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
+  const second = await waitFor(`window.innerHeight === ${heightBefore}`, 6000)
+  console.log('second Back:', second ? 'left fullscreen' : 'still fullscreen', '| native:', adb('logcat', '-d', '-s', 'PdfFiles:I').split('\n').filter((l) => /PdfFiles/.test(l)).map((l) => l.replace(/^.*PdfFiles\s*:\s*/, '')).join(' | ') || '(nothing)')
+}
 check('Back leaves fullscreen: tabs and toolbar back', await ev(`!document.querySelector('.tab-bar').classList.contains('tucked') && !document.querySelector('${ACTIVE} .toolbar-wrap.tucked')`))
 check('Back did not leave the app', adb('shell', 'dumpsys', 'activity', 'activities').includes(`${PKG}/.MainActivity`) && (await ev('document.visibilityState')) === 'visible')
 
