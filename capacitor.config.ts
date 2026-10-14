@@ -15,8 +15,12 @@ const config: CapacitorConfig = {
   plugins: {
     SystemBars: {
       // The app does not draw under the status/navigation bars: no
-      // viewport-fit=cover in index.html, so the WebView is inset for us
-      insetsHandling: 'css'
+      // viewport-fit=cover in index.html, so the WebView is inset for us.
+      // 'native', not the default 'css': nothing here reads the injected
+      // --safe-area-inset-* variables, and the injection ran before the
+      // document existed on a cold start («Error injecting safe area CSS»,
+      // the emulated tablet's console)
+      insetsHandling: 'native'
     }
   }
 }

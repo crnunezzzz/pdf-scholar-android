@@ -41,9 +41,19 @@ const shot = (name) => {
 const size = adb('shell', 'wm', 'size')
 const density = adb('shell', 'wm', 'density')
 console.log(`device: ${adb('shell', 'getprop', 'ro.product.model')}, Android ${adb('shell', 'getprop', 'ro.build.version.release')}, ${size.split('\n').pop()}, ${density.split('\n').pop()}`)
-// Landscape first, held still (the test turns it itself later)
-adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0')
-adb('shell', 'settings', 'put', 'system', 'user_rotation', '1')
+/** Lock the display at a rotation (0..3). `wm user-rotation` is the
+ *  supported way on Android 12+; the settings pair is the older one. A tablet's
+ *  natural orientation is landscape, so 0 is landscape there and 1 upright. */
+function rotate(r) {
+  try {
+    adb('shell', 'wm', 'user-rotation', 'lock', String(r))
+  } catch {
+    adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0')
+    adb('shell', 'settings', 'put', 'system', 'user_rotation', String(r))
+  }
+}
+// The tablet's natural landscape first, held still (the test turns it later)
+rotate(0)
 
 adb('install', '-r', '-g', APK)
 // Two documents in the app's own storage: readable through a file:// intent
@@ -172,6 +182,8 @@ openWith('paper-b.pdf')
 check('a second «Open with» adds a second tab', await waitFor(`document.querySelectorAll('.tab-label').length === 2`), (await tabNames()).join(' | '))
 await waitFor(`!!document.querySelector('${ACTIVE} canvas')`)
 await sleep(1500)
+const [lw, lh] = await ev('[window.innerWidth, window.innerHeight]')
+check('landscape: the WebView is landscape', lw > lh, `${lw}x${lh}`)
 check('landscape: the toolbar fits', (await toolbarFits()) === true, String(await toolbarFits()))
 shot('1-landscape-two-tabs')
 
@@ -205,8 +217,13 @@ await sleep(600)
 check('fullscreen: a swipe down from the top shows the toolbar', await ev(`!document.querySelector('${ACTIVE} .toolbar-wrap.tucked')`))
 shot('4-fullscreen-toolbar-revealed')
 adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
-await sleep(1500)
-check('Back leaves fullscreen: system bars back', (await ev('window.innerHeight')) === heightBefore, `${await ev('window.innerHeight')} px`)
+await waitFor(`window.innerHeight === ${heightBefore}`, 6000)
+const heightAfter = await ev('window.innerHeight')
+if (heightAfter !== heightBefore) {
+  // What the window manager thinks the bars are doing, for the log
+  console.log(adb('shell', 'dumpsys', 'window', 'windows').split('\n').filter((l) => /requestedVisib|mRequestedVisibleTypes|InsetsSource.*(statusBars|navigationBars|tappableElement).*visible/i.test(l)).slice(0, 12).join('\n'))
+}
+check('Back leaves fullscreen: system bars back', heightAfter === heightBefore, `${heightAfter} px`)
 check('Back leaves fullscreen: tabs and toolbar back', await ev(`!document.querySelector('.tab-bar').classList.contains('tucked') && !document.querySelector('${ACTIVE} .toolbar-wrap.tucked')`))
 check('Back did not leave the app', adb('shell', 'dumpsys', 'activity', 'activities').includes(`${PKG}/.MainActivity`) && (await ev('document.visibilityState')) === 'visible')
 
@@ -234,8 +251,9 @@ shot('5-pen-saved')
 
 // ---------- 5. turned upright ----------
 
-adb('shell', 'settings', 'put', 'system', 'user_rotation', '0')
-await sleep(2500)
+rotate(1)
+await waitFor('window.innerHeight > window.innerWidth', 8000)
+await sleep(1000)
 const [w, h] = await ev('[window.innerWidth, window.innerHeight]')
 check('portrait: the WebView turned', h > w, `${w}x${h}`)
 check('portrait: the toolbar fits', (await toolbarFits()) === true, String(await toolbarFits()))
@@ -262,6 +280,10 @@ const errors = logcat.split('\n').filter((l) => /\sE\s/.test(l))
 check('no errors in the WebView console', errors.length === 0, errors.slice(0, 3).join(' || '))
 
 ws.close()
-adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '1')
+try {
+  adb('shell', 'wm', 'user-rotation', 'free')
+} catch {
+  adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '1')
+}
 console.log(failures ? `\n${failures} FAILED` : '\nall passed')
 process.exit(failures ? 1 : 0)

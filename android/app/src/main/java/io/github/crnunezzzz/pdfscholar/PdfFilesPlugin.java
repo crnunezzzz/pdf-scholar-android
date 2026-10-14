@@ -150,8 +150,12 @@ public class PdfFilesPlugin extends Plugin {
             controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             controller.hide(WindowInsetsCompat.Type.systemBars());
         } else {
+            controller.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_DEFAULT);
             controller.show(WindowInsetsCompat.Type.systemBars());
         }
+        // The WebView's inset (Capacitor's SystemBars pads the decor view from
+        // the insets) must follow at once, not at the next layout pass
+        androidx.core.view.ViewCompat.requestApplyInsets(window.getDecorView());
     }
 
     // ---------- Reading ----------
