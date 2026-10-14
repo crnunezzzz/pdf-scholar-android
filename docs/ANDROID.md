@@ -88,10 +88,19 @@ environment variables, and run `./gradlew bundleRelease` for an `.aab`. Keep
 the keystore out of the repository — losing it means no further updates to
 the same store listing.
 
-## Not verified
+## On a device: `npm run test:android-device`
 
-No test drives the app on a device or emulator; CI proves it builds. Before
-calling a version good on Android, check by hand on a phone: open from the
-picker and from a file manager's «Open with», annotate and save (then reopen
-the file in another app), the split with two documents, print, a restart
-bringing the tabs back, and one AI question.
+`scripts/test-android-device.mjs` installs the debug APK on whatever `adb`
+sees (a USB device, or an emulator) and drives the WebView over its DevTools
+socket: two documents through «Open with» become two tabs, the two-document
+split from the layout menu, fullscreen hides the system bars, tab strip and
+toolbar, a swipe shows the toolbar, Back leaves fullscreen without leaving
+the app, a pen stroke saved in place reaches the file (`/Ink` in its bytes),
+the device turned upright keeps a toolbar that fits, and a cold restart
+brings both tabs back. Screenshots land in `android-shots/`.
+
+CI runs it on an emulated **Pixel Tablet** (Android 15) on every pull
+request (`.github/workflows/android-tablet.yml`, screenshots attached to the
+run). It cannot reach the system file picker, the print dialog or the share
+sheet — those, and one AI question, stay a hand check on a real device before
+calling a version good.

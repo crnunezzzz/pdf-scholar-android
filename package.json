@@ -20,6 +20,7 @@
     "android:sync": "npm run build:android && cap sync android",
     "android:apk": "npm run android:sync && cd android && ./gradlew assembleDebug",
     "android:open": "cap open android",
+    "test:android-device": "node scripts/test-android-device.mjs",
     "icons:app": "electron scripts/render-icon.cjs && electron scripts/render-file-icon.cjs",
     "icons:ext": "electron scripts/render-extension-icons.cjs",
     "icons:appx": "electron scripts/render-appx-tiles.cjs",
