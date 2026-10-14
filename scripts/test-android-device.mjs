@@ -55,6 +55,12 @@ function rotate(r) {
 // The tablet's natural landscape first, held still (the test turns it later)
 rotate(0)
 
+// Android shows a one-time «Viewing full screen» notice the first time an app
+// goes immersive, and that system window holds the key focus until it is
+// tapped away — every Back went to it (the tablet runs' window dump:
+// mCurrentFocus=ImmersiveModeConfirmation). A person taps «Got it» once; the
+// test marks it seen, as Android's own UI tests do.
+adb('shell', 'settings', 'put', 'secure', 'immersive_mode_confirmations', 'confirmed')
 adb('install', '-r', '-g', APK)
 // Two documents in the app's own storage: readable through a file:// intent
 // without any storage permission, and writable, so «Save» goes in place

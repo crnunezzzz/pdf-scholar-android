@@ -54,7 +54,8 @@ shared renderer; only the platform layer is new. Tier and divergences:
   whatever its pin says. A swipe down from the top (within 48 px — the very
   edge belongs to the system's own bars) brings the toolbar back for a few
   seconds; the same button, or Back, leaves. Returning to the app keeps it
-  fullscreen.
+  fullscreen. The very first time, Android itself shows a «Viewing full
+  screen» notice that holds Back until it is tapped away — once per install.
 - **Back button** leaves fullscreen first; otherwise it sends the app to the
   background (tabs stay as they were). The session restores the tab strip
   after the app is closed.
