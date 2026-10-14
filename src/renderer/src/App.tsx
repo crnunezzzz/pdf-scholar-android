@@ -5,12 +5,13 @@ import type {
   ManualUpdateChannel,
   ReadingPosition,
   RecentFile,
+  SessionTab,
   SessionWindow,
   Settings,
   ThemeName
 } from '../../shared/types'
 import { BREW_UPGRADE_COMMAND, RELEASES_PAGE_URL } from '../../shared/update-channel'
-import { bridge, isElectron } from './bridge'
+import { bridge, hasAppTabs, isAndroid, isElectron } from './bridge'
 import { errorText, setLanguage, t, useLang } from './i18n'
 import { commandForEvent, isKeyboardCaptured, setKeymapOverrides } from './keymap'
 import { applyPageTune, tuneTitleBar } from './theme-tune'
@@ -1007,7 +1008,7 @@ export default function App(): React.JSX.Element {
         lazyIdsRef.current.add(id)
         return {
           id,
-          payload: { path: s.path, name: baseName(s.path), data: new Uint8Array() },
+          payload: { path: s.path, name: s.name ?? baseName(s.path), data: new Uint8Array() },
           initialPosition: null,
           epoch: 0,
           splitDoc: null,
@@ -1079,9 +1080,14 @@ export default function App(): React.JSX.Element {
   // elsewhere). Debounced while the strip changes, and sent at once when the
   // window goes, so the last tab closed before closing the window counts.
   useEffect(() => {
-    if (!isElectron || !sessionTaken) return
+    if (!hasAppTabs || !sessionTaken) return
     const snapshot = (): SessionWindow => ({
-      tabs: tabs.map((x) => (x.pinned ? { path: x.payload.path, pinned: true } : { path: x.payload.path })),
+      tabs: tabs.map((x) => {
+        const tab: SessionTab = x.pinned ? { path: x.payload.path, pinned: true } : { path: x.payload.path }
+        // A content:// URI says nothing readable about the file it names
+        if (isAndroid) tab.name = x.payload.name
+        return tab
+      }),
       active: Math.max(0, tabs.findIndex((x) => x.id === activeId))
     })
     const timer = window.setTimeout(() => bridge.setSessionTabs(snapshot()), 300)
@@ -1395,11 +1401,11 @@ export default function App(): React.JSX.Element {
                 // This tab's own document included: picking it puts the
                 // document in both columns (the same-file split)
                 splitCandidates={
-                  isElectron
+                  hasAppTabs
                     ? tabs.map((o) => ({ name: o.payload.name, path: o.payload.path }))
                     : undefined
                 }
-                onRequestOpenOtherInSplit={isElectron ? () => void openOtherInSplit(tab.id) : undefined}
+                onRequestOpenOtherInSplit={hasAppTabs ? () => void openOtherInSplit(tab.id) : undefined}
               />
             </div>
           )

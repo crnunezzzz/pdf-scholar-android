@@ -21,7 +21,7 @@ import type {
   ThemeName,
   ViewRotation
 } from '../../../shared/types'
-import { bridge, isElectron, isExtension } from '../bridge'
+import { bridge, isAndroid, isElectron, isExtension, writesInPlace } from '../bridge'
 import { isSharedWith, markSharedWith } from '../ai-sharing'
 import { useDropTarget } from './useDropTarget'
 import { useDocumentDrag } from './useDocumentDrag'
@@ -6621,7 +6621,9 @@ export default function PdfViewer({
    *  prints the draft file the same way through a hidden window. */
   const printDocument = useCallback(() => {
     void (async () => {
-      if (!isElectron) {
+      // Android prints through its own print service (bridge.printFile, below):
+      // a WebView has no PDF viewer to hand the blob to, and no window.print
+      if (!isElectron && !isAndroid) {
         const bytes = await browserCurrentBytes(payload.path)
         if (bytes) {
           const url = URL.createObjectURL(
@@ -6749,7 +6751,7 @@ export default function PdfViewer({
         // would offer to save the viewer PAGE, never the PDF) it has to: it does
         // exactly what the Save-a-copy button does — one Save dialog, or a
         // download where pickers are missing. Edge's built-in viewer sets that bar.
-        if (dirty || (!isElectron && !isExtension)) void saveDocument()
+        if (dirty || !writesInPlace) void saveDocument()
         else if (isExtension && isRemoteSource(payload.path)) void saveDocumentAs()
         break
       case 'file.saveAs':
@@ -7240,7 +7242,7 @@ export default function PdfViewer({
           dirty={dirty}
           onSave={() => void saveDocument()}
           onSaveAs={() => void saveDocumentAs()}
-          canSaveInPlace={isElectron || isExtension}
+          canSaveInPlace={writesInPlace}
           annotsHidden={annotsHidden}
           onToggleAnnots={() => setAnnotsHidden((h) => !h)}
           canUndo={undoDepths.undo > 0}
@@ -7717,7 +7719,8 @@ export default function PdfViewer({
                 chatSnip={chatSnip}
                 onChatSnipConsumed={() => setChatSnip(null)}
                 onRequestSnip={() => armSnip('chat')}
-                onDetach={() => {
+                // A phone has no second window to move the chat into
+                onDetach={isAndroid ? undefined : () => {
                   // The chat moves out; the docked panel closes behind it.
                   // Reopening it (A) is allowed — both write the same stored
                   // history, and the panel refreshes on the storage event.

@@ -1,0 +1,90 @@
+# Android app
+
+PDF Scholar on Android is the same renderer the desktop and the extension run
+(React + pdf.js + the EmbedPDF engine), wrapped by [Capacitor](https://capacitorjs.com)
+in a native Android app and shipped as an APK. Tabs, the split view (the same
+document twice, or two documents side by side), annotations, bookmarks,
+search, reading modes, the library and the AI assistant all come from the
+shared renderer; only the platform layer is new. Tier and divergences:
+`docs/PLATFORMS.md` (tier 3, divergence 31).
+
+## Install the APK
+
+1. Open the repository's **Actions** tab → workflow **Android** → the latest
+   green run → artifact **pdf-scholar-android-apk**, and download it (a zip
+   holding `PDF-Scholar-<version>-debug.apk`).
+2. Copy the `.apk` to the phone (or download it there), open it and allow
+   «install unknown apps» for the app you opened it with when Android asks.
+3. A newer APK installs over the old one and keeps the library, positions and
+   settings: every build is signed with the same debug key, checked in as
+   `android/app/debug.keystore` (a CI runner would otherwise make a new one per
+   run, and Android refuses an update signed with another key). A debug key is
+   not a release key: for the Play Store, see «Release build» below.
+
+## How it is put together
+
+| Piece | Where |
+| --- | --- |
+| Web build for the app | `config/vite.android.config.ts` → `dist-android/` |
+| Capacitor config (app id, WebView floor, system bars) | `capacitor.config.ts` |
+| Platform layer (the `PdfxApi` for Android) | `src/renderer/src/android-api.ts`, picked in `bridge.ts` |
+| Native half: files, printing, «Open with» | `android/app/src/main/java/io/github/crnunezzzz/pdfscholar/PdfFilesPlugin.java` |
+| Intents (open/share a PDF to the app) | `android/app/src/main/AndroidManifest.xml` |
+| CI build of the APK | `.github/workflows/android.yml` |
+
+- **Documents** are opened with the system file picker (Storage Access
+  Framework) and keyed on their `content://` URI. The app takes a persistable
+  read+write grant, so recents reopen after a restart and Save writes back to
+  the same file. A PDF another app hands over («Open with», share sheet) may
+  be read-only; saving it goes through «Save as».
+- **Bytes** come in through a cache copy the WebView fetches from Capacitor's
+  local server (never a 40 MB base64 string over the bridge); saves, prints
+  and shares go out as base64 once.
+- **pdf.js** is aliased to its legacy build for this target only: the modern
+  build calls `Map.prototype.getOrInsertComputed`, which a Chromium 141
+  WebView does not have, and every page failed to draw.
+- **AI** is the extension's client (`extension-ai.ts`): the reader's own key,
+  sealed with WebCrypto, calls straight from the WebView (origin
+  `https://localhost`). A provider reached that way must answer CORS; one that
+  does not fails here although it works on the desktop. Which do has not been
+  checked on a device yet — `npm run test:live` covers the desktop only.
+- **Back button** sends the app to the background (tabs stay as they were);
+  the session restores the tab strip after the app is closed.
+- **Fullscreen** is Android's immersive mode; the status bar's icons follow
+  the reading theme.
+
+## Build locally
+
+Needs Node 22, JDK 21 and the Android SDK (Android Studio installs it).
+
+```sh
+npm ci
+npm run android:sync   # build dist-android/ and copy it into android/
+npm run android:apk    # …and assemble android/app/build/outputs/apk/debug/app-debug.apk
+npm run android:open   # or open the project in Android Studio
+```
+
+Renderer changes need `android:sync` again before the next APK. The launcher
+icons and splash screens under `android/app/src/main/res/` were drawn from
+`build/icon.png`; redraw them when that changes.
+
+To look at the phone layout without a device, `npm run build:android` and
+`npx vite preview --config config/vite.android.config.ts`, then open
+`http://localhost:4173/#open=sample.pdf` at a phone-sized viewport (Chromium
+device mode). The platform layer falls back to the web one there.
+
+## Release build
+
+The CI APK is debug-signed. For a store upload, create a keystore, add a
+`signingConfigs.release` to `android/app/build.gradle` reading it from
+environment variables, and run `./gradlew bundleRelease` for an `.aab`. Keep
+the keystore out of the repository — losing it means no further updates to
+the same store listing.
+
+## Not verified
+
+No test drives the app on a device or emulator; CI proves it builds. Before
+calling a version good on Android, check by hand on a phone: open from the
+picker and from a file manager's «Open with», annotate and save (then reopen
+the file in another app), the split with two documents, print, a restart
+bringing the tabs back, and one AI question.

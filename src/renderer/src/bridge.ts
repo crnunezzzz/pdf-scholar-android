@@ -12,6 +12,7 @@ import type {
 } from '../../shared/types'
 import { t } from './i18n'
 import { createExtensionApi, isExtensionContext } from './extension-api'
+import { createAndroidApi, isAndroidContext } from './android-api'
 import { requestAssistantJump, subscribeAssistantJumps } from './assistant-channel'
 import { buildAssistantHash } from '../../shared/viewer-url'
 import { version as appVersion } from '../../../package.json'
@@ -35,6 +36,19 @@ export const isElectron = typeof window !== 'undefined' && !!window.api
  *  the plain-web dev fallback, the extension can write back to local files via
  *  a retained File System Access handle, so it supports in-place save. */
 export const isExtension = !isElectron && isExtensionContext()
+
+/** True in the Android app (Capacitor WebView, see android-api.ts and
+ *  docs/ANDROID.md). Like the desktop it keeps its own tab strip and writes
+ *  back to the documents it opened. */
+export const isAndroid = !isElectron && !isExtension && isAndroidContext()
+
+/** The app owns its tabs (desktop, Android) rather than the browser: the strip
+ *  is remembered across launches and another document can join a split */
+export const hasAppTabs = isElectron || isAndroid
+
+/** A save goes back over the document that was opened (desktop in place, the
+ *  extension through its file handle, Android through the picker's grant) */
+export const writesInPlace = isElectron || isExtension || isAndroid
 
 interface WebState {
   positions: Record<string, ReadingPosition>
@@ -483,4 +497,6 @@ export const bridge: PdfxApi = window.api
   ? window.api
   : isExtensionContext()
     ? createExtensionApi(webApi)
-    : webApi
+    : isAndroidContext()
+      ? createAndroidApi(webApi)
+      : webApi

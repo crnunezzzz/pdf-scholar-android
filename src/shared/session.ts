@@ -62,10 +62,12 @@ export function sanitizeSessionWindow(raw: unknown): StoredSessionWindow | null 
   let activePath: string | null = null
   w.tabs.slice(0, SESSION_MAX_TABS).forEach((t, i) => {
     if (!t || typeof t !== 'object') return
-    const { path, pinned } = t as Record<string, unknown>
+    const { path, pinned, name } = t as Record<string, unknown>
     if (typeof path !== 'string' || path === '' || seen.has(path)) return
     seen.add(path)
-    tabs.push(pinned === true ? { path, pinned: true } : { path })
+    const tab: SessionTab = pinned === true ? { path, pinned: true } : { path }
+    if (typeof name === 'string' && name !== '' && name.length <= 255) tab.name = name
+    tabs.push(tab)
     if (i === w.active) activePath = path
   })
   if (tabs.length === 0) return null

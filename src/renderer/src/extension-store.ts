@@ -1,10 +1,13 @@
 // Small async key/value store for the browser-extension target: chrome.storage
 // .local when running as a real extension, localStorage otherwise (plain-page
 // dev). Shared by extension-api.ts (settings/positions/recents) and
-// extension-ai.ts (AI config + keys) so there is one storage shim, not two.
+// extension-ai.ts (AI config + keys) so there is one storage shim, not two —
+// and by the Android app (android-api.ts), whose WebView has no `chrome` global
+// at all: a bare `chrome?.storage` would throw a ReferenceError there, hence
+// the typeof guard in front of each.
 export const store = {
   async get<T>(key: string, fallback: T): Promise<T> {
-    if (chrome?.storage) {
+    if (typeof chrome !== 'undefined' && chrome?.storage) {
       const got = await chrome.storage.local.get(key)
       return (got[key] as T) ?? fallback
     }
@@ -16,7 +19,7 @@ export const store = {
     }
   },
   set(key: string, value: unknown): void {
-    if (chrome?.storage) {
+    if (typeof chrome !== 'undefined' && chrome?.storage) {
       void chrome.storage.local.set({ [key]: value })
     } else {
       try {
