@@ -7552,12 +7552,29 @@ export default function PdfViewer({
             <SplitPicker
               docs={splitCandidates}
               currentPath={payload.path}
+              threeOpen={!!mosaic?.open}
+              canThree={!!mosaic?.canOpen}
+              onOne={() => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+              }}
+              onThree={
+                mosaic
+                  ? () => {
+                      setSplitPicking(false)
+                      if (!mosaic.open) mosaic.onToggle()
+                    }
+                  : undefined
+              }
+              // Two documents: the mosaic (if it showed) ends first
               onPick={(path) => {
                 setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
                 void onRequestOpenInSplit?.(path)
               }}
               onOther={() => {
                 setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
                 onRequestOpenOtherInSplit?.()
               }}
               onClose={() => setSplitPicking(false)}

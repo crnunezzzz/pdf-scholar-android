@@ -2505,6 +2505,56 @@ html.pen-near .draw-layer {
   color: var(--text);
 }
 
+/* 1 / 2 / 3 documents: a segmented choice, each segment a finger-sized target */
+.split-picker-layouts {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.split-picker-layout {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.split-picker-layout:hover,
+.split-picker-layout:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.split-picker-layout.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.split-picker-layout[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.split-picker-layout-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .split-picker-search {
   display: flex;
   align-items: center;

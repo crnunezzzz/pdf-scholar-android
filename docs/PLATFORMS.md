@@ -614,7 +614,10 @@ the owner. It is held to the divergences below (31) and nothing else.
     (`SplitPicker.tsx`, 2026-10-15) wherever the app owns its tabs, desktop
     included; on Android it is also the LAST button to fold into «…» (the
     desktop folds it first — it has the 's' key, which stays the instant
-    same-file split everywhere).
+    same-file split everywhere). The same panel opens with a 1 / 2 / 3
+    documents choice: 1 puts the question away (and ends the mosaic), 2 lists
+    the documents, 3 stands the three-document mosaic up at once (waiting for
+    a third tab); from a mosaic tile it opens with 3 chosen.
 
 ## Maintenance rules
 

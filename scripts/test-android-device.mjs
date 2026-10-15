@@ -252,6 +252,9 @@ await pressSplit()
 await waitFor(`!!document.querySelector('${ACTIVE} .split-picker')`, 5000)
 const pickRows = await ev(`[...document.querySelectorAll('${ACTIVE} .split-picker-item:not(.split-picker-other) .split-picker-name')].map((e) => e.textContent)`)
 check('the split button asks which document: this one first, then the other tab', pickRows.join() === 'calculo.pdf,economia.pdf', pickRows.join(' | '))
+// …and how many documents: 1 / 2 / 3, «2» chosen, «3» waiting for a third tab
+const layoutState = await ev(`[...document.querySelectorAll('${ACTIVE} .split-picker-layout')].map((b) => (b.getAttribute('aria-pressed') === 'true' ? '+' : '') + (b.getAttribute('aria-disabled') === 'true' ? '!' : '') + b.textContent).join()`)
+check('the picker offers 1 / 2 / 3 documents: two chosen, three waiting for a third tab', layoutState === '1 document,+2 documents,!3 documents', layoutState)
 shot('2a-split-picker')
 const cand = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .split-picker-item')].find((x) => x.textContent.includes('economia.pdf')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
 if (cand) {

@@ -66,9 +66,11 @@ shared renderer; only the platform layer is new. Tier and divergences:
   fullscreen. The very first time, Android itself shows a «Viewing full
   screen» notice that holds Back until it is tapped away — once per install.
 - **Two documents side by side**: the split-view button (in the toolbar,
-  the last button to fold into «…») asks which document goes beside this one
-  — a panel over the right half lists this document (both columns on it), the
-  other open tabs, and «Another file …»; a tap opens it in the second column,
+  the last button to fold into «…») asks how many documents and which
+  — a panel over the right half starts with 1 / 2 / 3 documents (3 is the
+  mosaic below, at once; it waits for a third tab), and for two lists this
+  document (both columns on it), the other open tabs, and «Another file …»;
+  a tap opens it in the second column,
   a tap beside the panel or its cross puts the question away
   (`src/renderer/src/components/SplitPicker.tsx`). Pressed again it closes the
   split. A finger can also drag a tab onto the
