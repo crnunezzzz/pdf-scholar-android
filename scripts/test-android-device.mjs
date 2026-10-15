@@ -10,7 +10,10 @@
 // the file (an /Ink in its bytes); turning the device keeps the split and a
 // toolbar that fits; a third document and the three-document mosaic, upright
 // and turned, every tile drawing with a toolbar that fits it; a cold restart
-// brings all three tabs back. Screenshots of each
+// brings all three tabs back. The three are DIFFERENT documents
+// (scripts/fixtures/android: title, page count, page shape and font differ),
+// and every tab, column and tile is checked for showing its own — a view
+// that showed the wrong one would pass a test of copies. Screenshots of each
 // state land in android-shots/ (CI uploads them).
 //
 // Needs adb on PATH and one device/emulator attached, and a debug APK (the
@@ -22,7 +25,9 @@ import { fileURLToPath } from 'node:url'
 
 const PKG = 'io.github.crnunezzzz.pdfscholar'
 const APK = process.argv[2] ?? 'android/app/build/outputs/apk/debug/app-debug.apk'
-const SAMPLE = fileURLToPath(new URL('../src/renderer/public/sample.pdf', import.meta.url))
+const FIXTURES = fileURLToPath(new URL('fixtures/android/', import.meta.url))
+/** Each document: the title its first page prints, and its page count */
+const DOCS = { 'economia.pdf': ['Economía General II', 3], 'calculo.pdf': ['Matemáticas II', 8], 'historia.pdf': ['Historia del Perú', 2] }
 const SHOTS = 'android-shots'
 mkdirSync(SHOTS, { recursive: true })
 
@@ -64,10 +69,10 @@ rotate(0)
 // test marks it seen, as Android's own UI tests do.
 adb('shell', 'settings', 'put', 'secure', 'immersive_mode_confirmations', 'confirmed')
 adb('install', '-r', '-g', APK)
-// Two documents in the app's own storage: readable through a file:// intent
+// The documents in the app's own storage: readable through a file:// intent
 // without any storage permission, and writable, so «Save» goes in place
-for (const name of ['paper-a.pdf', 'paper-b.pdf', 'paper-c.pdf']) {
-  adb('push', SAMPLE, `/data/local/tmp/${name}`)
+for (const name of Object.keys(DOCS)) {
+  adb('push', FIXTURES + name, `/data/local/tmp/${name}`)
   adb('shell', 'run-as', PKG, 'mkdir', '-p', 'files')
   adb('shell', 'run-as', PKG, 'cp', `/data/local/tmp/${name}`, `files/${name}`)
 }
@@ -168,6 +173,19 @@ async function waitInk(ms = 20000) {
   }
   return false
 }
+/** Does `scope` show `file` — its title in the text of its first pane's pages,
+ *  no other document's title there, and its page count in the toolbar? */
+async function shows(scope, file) {
+  const got = await ev(`(() => { const el = document.querySelector(${JSON.stringify(scope)}); if (!el) return null; const pane = el.querySelector('[data-pane="a"]') ?? el; return { text: [...pane.querySelectorAll('.textLayer')].map((t) => t.textContent).join(' '), count: (el.querySelector('.page-indicator > span')?.textContent ?? '').replace(/\\D/g, '') } })()`)
+  const ok = !!got && got.text.includes(DOCS[file][0]) && !Object.entries(DOCS).some(([f, [title]]) => f !== file && got.text.includes(title)) && got.count === String(DOCS[file][1])
+  return [ok, got ? `${got.count} pages; «${got.text.slice(0, 24)}»` : 'not there']
+}
+const showsWhen = async (scope, file, ms = 15000) => {
+  await waitFor(`[...(document.querySelector(${JSON.stringify(scope)})?.querySelectorAll('.textLayer') ?? [])].some((t) => t.textContent.includes(${JSON.stringify(DOCS[file][0])}))`, ms)
+  return shows(scope, file)
+}
+const nativeLog = () =>
+  adb('logcat', '-d', '-s', 'PdfFiles:I').split('\n').filter((l) => /PdfFiles/.test(l)).map((l) => l.replace(/^.*PdfFiles\s*:\s*/, '')).join(' | ')
 const fileHas = (name, needle) => {
   try {
     return Number(adb('shell', 'run-as', PKG, 'grep', '-c', needle, `files/${name}`)) > 0
@@ -179,15 +197,23 @@ const fileHas = (name, needle) => {
 // ---------- 1. open with, two tabs ----------
 
 adb('shell', 'am', 'force-stop', PKG)
-openWith('paper-a.pdf')
+openWith('economia.pdf')
 await connect()
 const ua = await ev('navigator.userAgent')
 console.log('WebView:', /Chrome\/[\d.]+/.exec(ua)?.[0] ?? ua)
 check('the app loaded (not the «update WebView» page)', await waitFor(`!!document.querySelector('.app')`, 30000))
-check('«Open with» opened the document as a tab', await waitFor(`document.querySelectorAll('.tab-label').length === 1`))
+const firstTab = await waitFor(`document.querySelectorAll('.tab-label').length === 1`)
+check('«Open with» opened the document as a tab', firstTab, (await tabNames()).join(' | '))
+if (!firstTab) {
+  // What the native half saw of the launch, and what the page said
+  console.log('native:', nativeLog() || '(nothing)')
+  console.log('console:', adb('logcat', '-d', '-s', 'Capacitor/Console:*', 'Capacitor:*').split('\n').slice(-25).join('\n'))
+}
 check('the first page is drawn', await waitInk())
-openWith('paper-b.pdf')
+check('the tab shows economia.pdf (3 pages)', ...(await showsWhen(ACTIVE, 'economia.pdf')))
+openWith('calculo.pdf')
 check('a second «Open with» adds a second tab', await waitFor(`document.querySelectorAll('.tab-label').length === 2`), (await tabNames()).join(' | '))
+check('…and it shows calculo.pdf (8 pages), not the first one', ...(await showsWhen(ACTIVE, 'calculo.pdf')))
 await waitFor(`!!document.querySelector('${ACTIVE} canvas')`)
 await sleep(1500)
 const [lw, lh] = await ev('[window.innerWidth, window.innerHeight]')
@@ -198,7 +224,7 @@ shot('1-landscape-two-tabs')
 // ---------- 2. two-document split ----------
 
 await tap(`${ACTIVE} .theme-menu-anchor > .tb-btn[title="Zoom and page layout"]`)
-const cand = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .view-menu .menu-action')].find((x) => x.textContent.includes('paper-a.pdf')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+const cand = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .view-menu .menu-action')].find((x) => x.textContent.includes('economia.pdf')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
 check('the layout menu offers the other tab for the split', !!cand)
 if (cand) {
   await touch([cand])
@@ -206,6 +232,13 @@ if (cand) {
 }
 await sleep(1500)
 check('split shows the two documents side by side', (await docKeys()).length === 2, (await docKeys()).map((k) => k.split('/').pop()).join(' + '))
+const paneShows = async (pane, file) => {
+  await waitFor(`[...(document.querySelector('${ACTIVE} [data-pane="${pane}"]')?.querySelectorAll('.textLayer') ?? [])].some((t) => t.textContent.includes(${JSON.stringify(DOCS[file][0])}))`, 15000)
+  return ev(`[...(document.querySelector('${ACTIVE} [data-pane="${pane}"]')?.querySelectorAll('.textLayer') ?? [])].map((t) => t.textContent).join(' ').slice(0, 40)`)
+}
+const paneA = await paneShows('a', 'calculo.pdf'), paneB = await paneShows('b', 'economia.pdf')
+check('split: calculo in the left column', paneA.includes(DOCS['calculo.pdf'][0]) && !paneA.includes(DOCS['economia.pdf'][0]), paneA)
+check('split: economia in the right column', paneB.includes(DOCS['economia.pdf'][0]) && !paneB.includes(DOCS['calculo.pdf'][0]), paneB)
 check('split: the toolbar fits', (await toolbarFits()) === true, String(await toolbarFits()))
 shot('2-landscape-split')
 
@@ -256,11 +289,23 @@ check('Back did not leave the app', adb('shell', 'dumpsys', 'activity', 'activit
 
 // ---------- 4. a pen stroke, saved in place ----------
 
-// Back to one document so the stroke lands in this tab's own file
-await tap(`.tab-label`) // paper-a's tab
+// The split's own button closes it (inline, or in «…» when the toolbar is
+// full): calculo is one document again, its own page count back
+const splitBtn = await centre(`${ACTIVE} .toolbar .tb-btn[title^="Split view"]`)
+if (splitBtn) await touch([splitBtn])
+else {
+  await tap(`${ACTIVE} .toolbar button[title="More tools"]`)
+  const item = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .overflow-menu button')].find((x) => x.textContent.trim().startsWith('Split view')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+  if (item) await touch([item])
+}
+await waitFor(`!document.querySelector('${ACTIVE} [data-pane="b"]')`, 6000)
+check('the split closes: calculo alone again (8 pages)', ...(await shows(ACTIVE, 'calculo.pdf')))
+// Economia's own tab, so the stroke lands in that file
+await tap(`.tab-label`) // economia's tab
 await waitFor(`new Set([...document.querySelectorAll('${ACTIVE} [data-dockey]')].map((e) => e.dataset.dockey)).size === 1`)
 await sleep(800)
-check('before: no ink annotation in paper-a.pdf', !fileHas('paper-a.pdf', '/Ink'))
+check('economia\'s tab shows economia again', ...(await showsWhen(ACTIVE, 'economia.pdf')))
+check('before: no ink annotation in economia.pdf', !fileHas('economia.pdf', '/Ink'))
 const pen = await centre(`${ACTIVE} .toolbar .tb-btn[title^="Pen ("]`)
 check('the pen is in the toolbar', !!pen)
 if (pen) {
@@ -272,7 +317,8 @@ if (pen) {
   await tap(`${ACTIVE} .toolbar .tb-btn[title^="Save changes"]`)
   await sleep(2500)
 }
-check('Save wrote the stroke into the file itself (/Ink)', fileHas('paper-a.pdf', '/Ink'))
+check('Save wrote the stroke into the file itself (/Ink)', fileHas('economia.pdf', '/Ink'))
+check('…and into no other file', !fileHas('calculo.pdf', '/Ink') && !fileHas('historia.pdf', '/Ink'))
 check('the tab is clean after saving', await ev(`!document.querySelector('.tab-dirty-dot')`))
 shot('5-pen-saved')
 
@@ -289,9 +335,10 @@ shot('6-portrait')
 
 // ---------- 5b. three documents at once (the mosaic) ----------
 
-openWith('paper-c.pdf')
+openWith('historia.pdf')
 check('a third «Open with» adds a third tab', await waitFor(`document.querySelectorAll('.tab-label').length === 3`))
 await waitInk()
+check('…showing historia.pdf (2 pages)', ...(await showsWhen(ACTIVE, 'historia.pdf')))
 await tap(`${ACTIVE} .theme-menu-anchor > .tb-btn[title="Zoom and page layout"]`)
 const showThree = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .view-menu .menu-action')].find((x) => x.textContent.includes('Show three documents')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
 check('the layout menu offers «Show three documents»', !!showThree)
@@ -308,6 +355,9 @@ if (showThree) {
   check('mosaic: three documents on screen', (await ev(`document.querySelectorAll('${TILES}').length`)) === 3)
   check('mosaic: every tile draws its page', (await tileInk()).every((n) => n > 10), (await tileInk()).join(','))
   check('mosaic (upright): every toolbar fits its tile', await tilesFit())
+  // This tab on the large tile, the strip's next two (wrapping) on the quarters
+  for (const [role, file] of [['main', 'historia.pdf'], ['top', 'economia.pdf'], ['bottom', 'calculo.pdf']])
+    check(`mosaic: the ${role} tile shows ${file}`, ...(await showsWhen(`.tab-views.mosaic .tile-${role}`, file)))
   const up = await tileBoxes()
   check('mosaic (upright): one on the top half, two quarters below', up['tile-main'][1] < up['tile-top'][1] && up['tile-top'][1] === up['tile-bottom'][1] && up['tile-top'][0] < up['tile-bottom'][0], JSON.stringify(up))
   shot('6b-mosaic-upright')
@@ -319,6 +369,15 @@ if (showThree) {
   check('mosaic (landscape): every toolbar fits its tile', await tilesFit())
   check('mosaic (landscape): every tile draws its page', (await tileInk()).every((n) => n > 10))
   shot('6c-mosaic-landscape')
+  // A finger drags calculo's tab onto the large tile: calculo and historia
+  // trade places (tab-touch-drag.ts on a real touch screen)
+  const from = await ev(`(() => { const r = [...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('calculo.pdf')).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+  const to = await centre('.tab-views.mosaic .tile-main')
+  await touch(Array.from({ length: 21 }, (_, i) => ({ x: from.x + ((to.x - from.x) * i) / 20, y: from.y + ((to.y - from.y) * i) / 20 })))
+  await sleep(2500)
+  for (const [role, file] of [['main', 'calculo.pdf'], ['top', 'economia.pdf'], ['bottom', 'historia.pdf']])
+    check(`after a finger drags calculo's tab onto the large tile: ${role} shows ${file}`, ...(await showsWhen(`.tab-views.mosaic .tile-${role}`, file)))
+  shot('6d-mosaic-dragged')
   await tap(`.tab-view.focused .theme-menu-anchor > .tb-btn[title="Zoom and page layout"]`)
   const back = await ev(`(() => { const b = [...document.querySelectorAll('.tab-view.focused .view-menu .menu-action')].find((x) => x.textContent.includes('Back to one document')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
   if (back) await touch([back])
@@ -333,8 +392,11 @@ adb('shell', 'am', 'force-stop', PKG)
 adb('shell', 'am', 'start', '-W', '-n', `${PKG}/.MainActivity`)
 await connect()
 check('after a restart all three tabs are back', await waitFor(`document.querySelectorAll('.tab-label').length === 3`, 30000), (await tabNames()).join(' | '))
-check('…with their names', [...(await tabNames())].sort().join() === 'paper-a.pdf,paper-b.pdf,paper-c.pdf', (await tabNames()).join(' | '))
+check('…with their names', [...(await tabNames())].join() === 'economia.pdf,calculo.pdf,historia.pdf', (await tabNames()).join(' | '))
 check('…and the shown one draws its page', await waitInk(30000))
+const shown = (await ev(`document.querySelector('.tab.active .tab-label')?.textContent.trim()`)) ?? ''
+if (DOCS[shown]) check(`…its own document (${shown})`, ...(await showsWhen(ACTIVE, shown, 30000)))
+else check('…a tab is shown', false, shown)
 shot('7-restarted')
 
 // ---------- the WebView's own console ----------

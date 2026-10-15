@@ -72,6 +72,7 @@ public class PdfFilesPlugin extends Plugin {
         Uri uri = documentUri(launch);
         if (uri != null) {
             pendingUri = uri.toString();
+            Log.i(TAG, "launch document " + pendingUri);
             // Handled: a recreated activity must not open it a second time
             launch.setAction(Intent.ACTION_MAIN);
         }
@@ -110,6 +111,7 @@ public class PdfFilesPlugin extends Plugin {
         super.handleOnNewIntent(intent);
         Uri uri = documentUri(intent);
         if (uri == null) return;
+        Log.i(TAG, "new intent document " + uri);
         JSObject event = new JSObject();
         event.put("uri", uri.toString());
         notifyListeners("openUri", event, true);
@@ -129,6 +131,7 @@ public class PdfFilesPlugin extends Plugin {
     public void takePendingUri(PluginCall call) {
         JSObject ret = new JSObject();
         if (pendingUri != null) ret.put("uri", pendingUri);
+        Log.i(TAG, "pending document taken: " + pendingUri);
         pendingUri = null;
         call.resolve(ret);
     }
