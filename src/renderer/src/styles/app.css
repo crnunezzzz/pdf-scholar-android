@@ -2444,6 +2444,171 @@ html.pen-near .draw-layer {
   font-size: 13px;
 }
 
+/* The split button's «which document beside it?» (SplitPicker): a panel
+   over the right half of the pages, where the second column will stand — the
+   way to a two-document split that needs no drag. The left half stays the
+   document, lightly veiled; a tap there puts the question away. */
+.split-picker-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--bg-canvas) 35%, transparent);
+}
+
+.split-picker {
+  width: 50%;
+  min-width: min(320px, 100%);
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 16px 14px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-menu);
+  outline: none;
+  overflow: hidden;
+}
+
+.split-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.split-picker-title {
+  flex: 1;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.split-picker-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.split-picker-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.split-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+
+.split-picker-search:focus-within {
+  border-color: var(--accent);
+}
+
+.split-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.split-picker-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Rows a finger can hit: 52 px, the whole width */
+.split-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.split-picker-item > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.split-picker-item:hover,
+.split-picker-item:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.split-picker-item:active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.split-picker-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.split-picker-name {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-picker-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.split-picker-other {
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  margin-top: 4px;
+}
+
+.split-picker-empty,
+.split-picker-hint {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* A narrow window has no half to spare: the panel takes the width */
+@media (max-width: 600px) {
+  .split-picker {
+    width: 100%;
+  }
+}
+
 /* The toolbar's "…" overflow dropdown (narrow screens): a compact action list,
    narrower than the settings/theme menus. */
 .overflow-menu {

@@ -65,7 +65,13 @@ shared renderer; only the platform layer is new. Tier and divergences:
   seconds; the same button, or Back, leaves. Returning to the app keeps it
   fullscreen. The very first time, Android itself shows a «Viewing full
   screen» notice that holds Back until it is tapped away — once per install.
-- **Two documents side by side**: put a finger on a tab and drag it onto the
+- **Two documents side by side**: the split-view button (in the toolbar,
+  the last button to fold into «…») asks which document goes beside this one
+  — a panel over the right half lists this document (both columns on it), the
+  other open tabs, and «Another file …»; a tap opens it in the second column,
+  a tap beside the panel or its cross puts the question away
+  (`src/renderer/src/components/SplitPicker.tsx`). Pressed again it closes the
+  split. A finger can also drag a tab onto the
   left or right half of the pages (`src/renderer/src/tab-touch-drag.ts` turns
   the finger's gesture into the drag events a mouse drag delivers, so the
   desktop's drop targets and hints work unchanged). While the tab strip
@@ -116,7 +122,7 @@ the same store listing.
 `scripts/test-android-device.mjs` installs the debug APK on whatever `adb`
 sees (a USB device, or an emulator) and drives the WebView over its DevTools
 socket: two documents through «Open with» become two tabs, the two-document
-split from the layout menu, fullscreen hides the system bars, tab strip and
+split through the split button's «which document?» panel, fullscreen hides the system bars, tab strip and
 toolbar, a swipe shows the toolbar, Back leaves fullscreen without leaving
 the app, a pen stroke saved in place reaches the file (`/Ink` in its bytes)
 and no other, the device turned upright keeps a toolbar that fits, a third

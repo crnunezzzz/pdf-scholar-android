@@ -350,6 +350,8 @@ interface Props {
    *  zoom are its own — so the toolbar's centre gains a column switcher, and its
    *  one cluster drives whichever column that switcher points at. */
   splitOpen: boolean
+  /** The split button's «which document?» panel is up (SplitPicker) */
+  splitPickerOpen?: boolean
   onSwapPanes(): void
   onToggleSplit(): void
   /** Desktop: the OTHER documents open in this window, offered under «Åpne i
@@ -561,6 +563,7 @@ export default function Toolbar({
   onPresent,
   onToggleFullscreen,
   splitOpen,
+  splitPickerOpen = false,
   onSwapPanes,
   onToggleSplit,
   splitCandidates,
@@ -1092,6 +1095,13 @@ export default function Toolbar({
   // first three out are the ones that are pointless or duplicated when narrow:
   // split (two columns in a narrow window), pin, and fit (also in the Vis menu,
   // and on W).
+  const splitAction = {
+    key: 'split',
+    icon: <IconSplit size={15} />,
+    label: t('tb.split'),
+    onClick: onToggleSplit,
+    active: splitOpen || splitPickerOpen
+  }
   const overflowActions: {
     key: string
     icon: React.JSX.Element
@@ -1113,7 +1123,10 @@ export default function Toolbar({
           }
         ]
       : []),
-    { key: 'split', icon: <IconSplit size={15} />, label: t('tb.split'), onClick: onToggleSplit, active: splitOpen },
+    // On a desktop the split has its key ('s') and folds early. On Android the
+    // button is the only way in (it asks which document, SplitPicker), so it
+    // is the last to fold — at the end of this list
+    ...(isAndroid ? [] : [splitAction]),
     {
       key: 'pin',
       icon: toolbarPinned ? <IconPin size={15} /> : <IconPinOff size={15} />,
@@ -1159,7 +1172,8 @@ export default function Toolbar({
     { key: 'forward', icon: <IconArrowRight size={15} />, label: t('tb.forward'), onClick: onNavForward, disabled: !canNavForward },
     { key: 'back', icon: <IconArrowLeft size={15} />, label: t('tb.back'), onClick: onNavBack, disabled: !canNavBack },
     { key: 'search', icon: <IconSearch size={15} />, label: t('tb.search'), onClick: onToggleSearch },
-    { key: 'ai', icon: <IconSparkle size={15} />, label: t('ai.assistant'), onClick: onToggleAi, active: aiOpen }
+    { key: 'ai', icon: <IconSparkle size={15} />, label: t('ai.assistant'), onClick: onToggleAi, active: aiOpen },
+    ...(isAndroid ? [splitAction] : [])
   ]
   const maxHidden = overflowActions.length
   const hiddenKeys = new Set(overflowActions.slice(0, Math.min(hiddenCount, maxHidden)).map((a) => a.key))
@@ -2453,7 +2467,7 @@ export default function Toolbar({
             was a second copy of a control that was never in the wrong place. */}
         {inline('split') && (
           <button
-            className={`tb-btn${splitOpen ? ' is-active' : ''}`}
+            className={`tb-btn${splitOpen || splitPickerOpen ? ' is-active' : ''}`}
             onClick={onToggleSplit}
             title={withShortcut(t('tb.splitTip'), 'view.split')}
           >

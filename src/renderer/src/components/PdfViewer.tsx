@@ -163,6 +163,7 @@ import Sidebar from './Sidebar'
 import SearchBar from './SearchBar'
 import Toolbar from './Toolbar'
 import type { MosaicControl } from './Toolbar'
+import SplitPicker from './SplitPicker'
 import { NotePopover, SelectionMenu } from './SelectionMenu'
 import { inTextField } from './TextContextMenu'
 import type { MenuAction, MenuState } from './SelectionMenu'
@@ -1118,6 +1119,25 @@ export default function PdfViewer({
     openSameFileSplit()
   }, [rememberPaneB, openSameFileSplit, requestSplitDoc])
   toggleSplitRef.current = toggleSplit
+
+  /** The split-view BUTTON (the toolbar's, and its row in «…»): where the
+   *  host can put another document in the second column, opening the split
+   *  first asks WHICH (SplitPicker over the right half) — this document, an
+   *  open tab, or another file. Closing, and the 's' key, stay toggleSplit. */
+  const [splitPicking, setSplitPicking] = useState(false)
+  const canPickSplit = !!(onRequestOpenInSplit && onRequestOpenOtherInSplit && splitCandidates)
+  const splitButton = useCallback(() => {
+    if (!splitOpenRef.current && !foreignRef.current && canPickSplit) {
+      setSplitPicking((open) => !open)
+      return
+    }
+    setSplitPicking(false)
+    toggleSplit()
+  }, [canPickSplit, toggleSplit])
+  // However the column came to open (the picker, a drop, 's'), the question is answered
+  useEffect(() => {
+    if (splitOpen) setSplitPicking(false)
+  }, [splitOpen])
 
   /** A document dropped on a column — a tab from the strip or a PDF from the
    *  OS — lands WHERE it was dropped (Emil, 2026-09-03: not always on the
@@ -7369,7 +7389,8 @@ export default function PdfViewer({
           onToggleFullscreen={toggleFullscreen}
           splitOpen={splitOpen}
           onSwapPanes={swapPanes}
-          onToggleSplit={toggleSplit}
+          onToggleSplit={splitButton}
+          splitPickerOpen={splitPicking}
           splitCandidates={
             onRequestOpenInSplit && onRequestOpenOtherInSplit
               ? {
@@ -7526,6 +7547,21 @@ export default function PdfViewer({
             <div className={`pane-drop-hint${paneADrop.half ? ` is-${paneADrop.half}` : ''}`}>
               <span>{t('viewer.dropSplitHint')}</span>
             </div>
+          )}
+          {splitPicking && !splitOpen && splitCandidates && (
+            <SplitPicker
+              docs={splitCandidates}
+              currentPath={payload.path}
+              onPick={(path) => {
+                setSplitPicking(false)
+                void onRequestOpenInSplit?.(path)
+              }}
+              onOther={() => {
+                setSplitPicking(false)
+                onRequestOpenOtherInSplit?.()
+              }}
+              onClose={() => setSplitPicking(false)}
+            />
           )}
         <div
           className={`pages${drawTool ? ' drawing' : ''}${paged ? ' paged' : ''}`}

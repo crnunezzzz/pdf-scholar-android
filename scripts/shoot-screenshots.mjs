@@ -212,6 +212,10 @@ const SHOTS = [
       // which re-anchors the scroll — so a jump made before the toggle does not
       // survive it. Layout, then position, then capture.
       await ui.toggle(L.split)
+      // The button asks WHICH document goes beside it (SplitPicker) where the
+      // app has tabs: this one, listed first, is the same-file split
+      await ui.settle(300)
+      document.querySelector('.tab-view.active .split-picker-item')?.click()
       await ui.settle(900)
       await ui.paneGoToPage(0, 3)
       // Right column onto the figure page: the shot should show the actual

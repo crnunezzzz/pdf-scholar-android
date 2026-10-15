@@ -610,6 +610,11 @@ the owner. It is held to the divergences below (31) and nothing else.
     A font the PDF names but does not embed is drawn with a bundled
     metric-compatible twin there (`pdf-fonts.ts`); the desktop uses the
     system's real font.
+    The split-view button asks which document goes beside this one
+    (`SplitPicker.tsx`, 2026-10-15) wherever the app owns its tabs, desktop
+    included; on Android it is also the LAST button to fold into «…» (the
+    desktop folds it first — it has the 's' key, which stays the instant
+    same-file split everywhere).
 
 ## Maintenance rules
 

@@ -201,6 +201,14 @@ const showsWhen = async (scope, file, ms = 15000) => {
 }
 const nativeLog = () =>
   adb('logcat', '-d', '-s', 'PdfFiles:I').split('\n').filter((l) => /PdfFiles/.test(l)).map((l) => l.replace(/^.*PdfFiles\s*:\s*/, '')).join(' | ')
+/** The split-view button: in the toolbar, or in «…» when it is full */
+async function pressSplit() {
+  const inline = await centre(`${ACTIVE} .toolbar .tb-btn[title^="Split view"]`)
+  if (inline) return touch([inline])
+  await tap(`${ACTIVE} .toolbar button[title="More tools"]`)
+  const item = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .overflow-menu button')].find((x) => x.textContent.trim().startsWith('Split view')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+  if (item) await touch([item])
+}
 const fileHas = (name, needle) => {
   try {
     return Number(adb('shell', 'run-as', PKG, 'grep', '-c', needle, `files/${name}`)) > 0
@@ -239,9 +247,13 @@ shot('1-landscape-two-tabs')
 
 // ---------- 2. two-document split ----------
 
-await tap(`${ACTIVE} .theme-menu-anchor > .tb-btn[title="Zoom and page layout"]`)
-const cand = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .view-menu .menu-action')].find((x) => x.textContent.includes('economia.pdf')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
-check('the layout menu offers the other tab for the split', !!cand)
+// The split button asks which document goes beside this one (SplitPicker)
+await pressSplit()
+await waitFor(`!!document.querySelector('${ACTIVE} .split-picker')`, 5000)
+const pickRows = await ev(`[...document.querySelectorAll('${ACTIVE} .split-picker-item:not(.split-picker-other) .split-picker-name')].map((e) => e.textContent)`)
+check('the split button asks which document: this one first, then the other tab', pickRows.join() === 'calculo.pdf,economia.pdf', pickRows.join(' | '))
+shot('2a-split-picker')
+const cand = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .split-picker-item')].find((x) => x.textContent.includes('economia.pdf')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
 if (cand) {
   await touch([cand])
   await waitFor(`new Set([...document.querySelectorAll('${ACTIVE} [data-dockey]')].map((e) => e.dataset.dockey)).size === 2`)
@@ -308,13 +320,7 @@ check('Back did not leave the app', adb('shell', 'dumpsys', 'activity', 'activit
 
 // The split's own button closes it (inline, or in «…» when the toolbar is
 // full): calculo is one document again, its own page count back
-const splitBtn = await centre(`${ACTIVE} .toolbar .tb-btn[title^="Split view"]`)
-if (splitBtn) await touch([splitBtn])
-else {
-  await tap(`${ACTIVE} .toolbar button[title="More tools"]`)
-  const item = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .overflow-menu button')].find((x) => x.textContent.trim().startsWith('Split view')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
-  if (item) await touch([item])
-}
+await pressSplit()
 await waitFor(`!document.querySelector('${ACTIVE} [data-pane="b"]')`, 6000)
 check('the split closes: calculo alone again (8 pages)', ...(await shows(ACTIVE, 'calculo.pdf')))
 // Economia's own tab, so the stroke lands in that file
