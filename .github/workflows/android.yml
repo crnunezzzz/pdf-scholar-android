@@ -32,6 +32,8 @@ jobs:
           # The desktop runtime is not needed to build the Android app
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
+      # The bundled twins for fonts a PDF names but does not embed
+      - run: npm run test:pdf-fonts
       # dist-android/ → android/app/src/main/assets/public, plus the generated
       # capacitor-cordova-android-plugins project the app module depends on
       - run: npm run android:sync

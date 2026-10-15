@@ -603,6 +603,9 @@ the owner. It is held to the divergences below (31) and nothing else.
     tightens (`app.css`, «A phone held upright») — no desktop window is that
     narrow. Fullscreen there also tucks the toolbar (the desktop keeps the two
     independent), its button never folds into «…», and Back leaves it.
+    A font the PDF names but does not embed is drawn with a bundled
+    metric-compatible twin there (`pdf-fonts.ts`); the desktop uses the
+    system's real font.
 
 ## Maintenance rules
 

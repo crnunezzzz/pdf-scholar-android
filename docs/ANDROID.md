@@ -43,6 +43,15 @@ shared renderer; only the platform layer is new. Tier and divergences:
 - **pdf.js** is aliased to its legacy build for this target only: the modern
   build calls `Map.prototype.getOrInsertComputed`, which a Chromium 141
   WebView does not have, and every page failed to draw.
+- **Fonts a PDF names but does not embed** (Word does this with Cambria,
+  Calibri, Times New Roman, Arial…): pdf.js asks the system for them, and an
+  Android device has none — the text came out in the device's generic serif
+  squeezed into the document's widths. `src/renderer/src/pdf-fonts.ts` hands
+  pdf.js metric-identical twins shipped in the APK instead (Caladea, Carlito,
+  Tinos, Arimo, Cousine, Gelasio; SIL OFL, `LICENSE-fonts.txt`), so every
+  glyph keeps the width the document gave it. A family with no free twin
+  (Aptos, Garamond, …) still falls back to the generic face; embedded fonts
+  were never affected. `npm run test:pdf-fonts` guards the mapping.
 - **AI** is the extension's client (`extension-ai.ts`): the reader's own key,
   sealed with WebCrypto, calls straight from the WebView (origin
   `https://localhost`). A provider reached that way must answer CORS; one that
