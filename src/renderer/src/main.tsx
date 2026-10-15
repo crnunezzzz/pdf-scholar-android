@@ -44,6 +44,8 @@ const assistantFor = parseAssistantTarget(location.href)
 // Android: fonts a PDF names but does not embed get metric-identical bundled
 // twins instead of the device's generic face (pdf-fonts.ts)
 if (isAndroid) installPdfFallbackFonts()
+// CSS that only the Android app wants (the tab strip's touch gestures)
+if (isAndroid) document.documentElement.classList.add('platform-android')
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>

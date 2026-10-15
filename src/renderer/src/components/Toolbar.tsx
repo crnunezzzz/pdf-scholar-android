@@ -753,6 +753,12 @@ export default function Toolbar({
   const overflowMenuRef = useRef<HTMLDivElement>(null)
   const [hiddenCount, setHiddenCount] = useState(0)
   const [overflowMenuOpen, setOverflowMenuOpen] = useState(false)
+  /** A folded tool's options, opened inside the "…" menu: brought into view,
+   *  since they open below rows that may already fill the menu's height */
+  const overflowToolRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (overflowMenuOpen && toolMenu) overflowToolRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [overflowMenuOpen, toolMenu])
 
   // Stable closers so the shared hook does not re-bind its listeners each render
   const closeToolMenu = useCallback(() => setToolMenu(null), [])
@@ -2826,7 +2832,9 @@ export default function Toolbar({
                     )}
                   </span>
                 ))}
-                {toolMenu && !inline(toolMenu === 'shape' ? 'shapes' : toolMenu) ? toolPopover : null}
+                {toolMenu && !inline(toolMenu === 'shape' ? 'shapes' : toolMenu) ? (
+                  <div ref={overflowToolRef}>{toolPopover}</div>
+                ) : null}
               </div>
             )}
           </div>

@@ -286,6 +286,39 @@ button {
   background: var(--hover);
 }
 
+/* Android: a finger on a tab drags it (tab-touch-drag.ts). While the strip
+   fits, the finger belongs to the tab outright — with pan-x a diagonal pull
+   toward the pages was taken by the browser and cancelled the drag. Once
+   the strip scrolls, a sideways swipe scrolls it, and the drag starts with
+   a pull downward or a short hold. */
+.platform-android .tab {
+  touch-action: pan-x;
+}
+.platform-android .tab-bar.strip-fits .tab {
+  touch-action: none;
+}
+
+/* The tab under a finger drag, following it (tab-touch-drag.ts) */
+.tab-touch-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  margin: -46px 0 0 -48px;
+  max-width: 220px;
+  padding: 7px 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: var(--shadow-menu);
+  pointer-events: none;
+  z-index: 1000;
+}
+
 .tab.active {
   background: var(--bg-chrome);
   color: var(--text);
@@ -2337,7 +2370,28 @@ html.pen-near .draw-layer {
    narrower than the settings/theme menus. */
 .overflow-menu {
   min-width: 184px;
+  max-width: calc(100vw - 16px);
   padding: 6px;
+}
+
+/* A folded tool's options (Shapes, Pen, Text …) open INSIDE the "…" menu,
+   below its rows. Positioned absolutely as under an inline button, the panel
+   sat on top of the menu's first rows and was clipped by the menu's own
+   scroll box — the swatches and the width slider cut off at the right and the
+   opacity slider at the bottom (a tablet, 2026-10-15). In the flow, the menu
+   widens to fit it and scrolls to it (Toolbar.tsx). */
+.overflow-menu .tool-menu {
+  position: static;
+  min-width: 0;
+  max-height: none;
+  overflow: visible;
+  margin: 6px 0 0;
+  padding: 10px 6px 4px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
 }
 
 .menu-hint {

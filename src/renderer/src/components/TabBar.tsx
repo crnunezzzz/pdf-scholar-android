@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { zoteroKeyFromPath } from '../../../shared/zotero'
 import { bridge, isAndroid, isElectron } from '../bridge'
 import { TAB_DRAG_MIME } from '../drag-types'
+import { startTabTouchDrag } from '../tab-touch-drag'
 import { t, useLang } from '../i18n'
 import { isMac } from '../platform'
 import { withShortcut } from '../keymap'
@@ -112,6 +113,19 @@ export default function TabBar({
   /** The "all tabs" list, opened from the chevron at the end of the strip */
   const [allOpen, setAllOpen] = useState(false)
   const [draggingId, setDraggingId] = useState<string | null>(null)
+  /** All tabs visible without scrolling the strip: on Android a finger on a
+   *  tab may then drag it in any direction (tab-touch-drag.ts) */
+  const innerRef = useRef<HTMLDivElement>(null)
+  const [stripFits, setStripFits] = useState(true)
+  useEffect(() => {
+    const el = innerRef.current
+    if (!el || !isAndroid) return
+    const measure = (): void => setStripFits(el.scrollWidth <= el.clientWidth + 1)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [tabs.length])
   /** How the pointer that is about to drag a tab touched it. The native file
    *  drag is for a MOUSE drag only (see PdfxApi.dragTabFile — the OS drag loop
    *  waits for a mouse button's release and never returns without one), and a
@@ -141,7 +155,13 @@ export default function TabBar({
 
   useEffect(() => {
     if (!menu) return
-    const close = (): void => setMenu(null)
+    // A long press (Android) opens the menu as the finger lifts, and the
+    // compatibility mousedown that lift produces must not close it again
+    const openedAt = performance.now()
+    const close = (): void => {
+      if (isAndroid && performance.now() - openedAt < 450) return
+      setMenu(null)
+    }
     window.addEventListener('mousedown', close)
     window.addEventListener('resize', close)
     return () => {
@@ -171,8 +191,8 @@ export default function TabBar({
   // and the content is inset to the OS-reported titlebar area so it never
   // slides under the native window controls.
   return (
-    <div className={`tab-bar${hidden ? ' tucked' : ''}`}>
-      <div className="tab-bar-inner">
+    <div className={`tab-bar${hidden ? ' tucked' : ''}${stripFits ? ' strip-fits' : ''}`}>
+      <div className="tab-bar-inner" ref={innerRef}>
       {tabs.length > 0 ? null : (
         <>
           <span className="tab-app-glyph" aria-hidden="true">
@@ -186,9 +206,20 @@ export default function TabBar({
           key={tab.id}
           className={`tab${tab.id === activeId ? ' active' : ''}${tab.id === draggingId ? ' dragging' : ''}${tab.pinned ? ' pinned' : ''}`}
           title={tab.path}
-          draggable
+          // Android: a finger drags through tab-touch-drag.ts (the WebView
+          // starts no HTML5 drag for one), so the element stays undraggable there
+          draggable={!isAndroid}
           onPointerDown={(e) => {
             dragPointer.current = { type: e.pointerType, buttons: e.buttons, mod: modOf(e) }
+            if (isAndroid && e.pointerType !== 'mouse') {
+              startTabTouchDrag(e.nativeEvent, e.currentTarget, {
+                path: tab.path,
+                name: tab.name,
+                onStart: () => setDraggingId(tab.id),
+                onLongPress: (x, y) => setMenu({ x, y, tab }),
+                stripScrolls: !stripFits
+              })
+            }
           }}
           onDragStart={(e) => {
             setDraggingId(tab.id)
