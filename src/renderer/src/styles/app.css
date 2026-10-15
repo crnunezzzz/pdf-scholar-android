@@ -417,6 +417,84 @@ button {
   visibility: visible;
 }
 
+/* ---- The mosaic (App): three documents at once — one on half the window,
+   two on a quarter each. Landscape: the half on the left, the quarters
+   stacked on the right. Portrait: the half on top, the quarters side by side
+   below. The 4 px between tiles is the container's border colour showing
+   through; the focused tile (the active tab) wears a thin accent frame. ---- */
+.tab-views.mosaic {
+  --gap: 2px;
+  background: var(--border);
+}
+.tab-views.mosaic .tab-view {
+  overflow: hidden;
+}
+.tab-views.mosaic .tile-main {
+  inset: 0 calc(50% + var(--gap)) 0 0;
+}
+.tab-views.mosaic .tile-top {
+  inset: 0 0 calc(50% + var(--gap)) calc(50% + var(--gap));
+}
+.tab-views.mosaic .tile-bottom {
+  inset: calc(50% + var(--gap)) 0 0 calc(50% + var(--gap));
+}
+@media (orientation: portrait) {
+  .tab-views.mosaic .tile-main {
+    inset: 0 0 calc(50% + var(--gap)) 0;
+  }
+  .tab-views.mosaic .tile-top {
+    inset: calc(50% + var(--gap)) calc(50% + var(--gap)) 0 0;
+  }
+  .tab-views.mosaic .tile-bottom {
+    inset: calc(50% + var(--gap)) 0 0 calc(50% + var(--gap));
+  }
+}
+.tab-views.mosaic .tab-view.focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  pointer-events: none;
+  z-index: 60;
+}
+
+/* A tile's tab in the strip: on screen, though not the focused one */
+.tab.tiled:not(.active) {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* The tiles' drop zones while a tab is dragged (MosaicDrop.tsx) */
+.mosaic-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+}
+.mosaic-zone {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 6px;
+  border: 2px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-canvas) 55%, transparent);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.mosaic-zone.is-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.mosaic-zone > span {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-menu);
+  padding: 8px 14px;
+  font-size: 13px;
+  pointer-events: none;
+}
+
 /* The file changed on disk under a tab holding unsaved marks (issue #41): a
    bar above the pages, not a modal — the reader decides when */
 .disk-change-bar {
@@ -8342,6 +8420,58 @@ html.touch-ui .toolbar {
     min-width: 32px;
   }
 }
+
+/* The mosaic's tiles (App) are narrower than the window: the same tightening
+   as the three blocks above, keyed to a tile's OWN width — App gives a tile
+   tile-w900 / tile-w600 / tile-w400 from its size, since a media query only
+   knows the window's. Generated from those blocks; change them together. */
+.tile-w900 .toolbar-center.is-split .center-cluster > .tb-btn {
+  display: none;
+}
+.tile-w600 .toolbar > .toolbar-group:first-child > .tb-btn:nth-of-type(2) {
+  display: none;
+}
+.tile-w600 .toolbar {
+  gap: 2px;
+  padding: 0 4px;
+}
+.tile-w600 .toolbar .toolbar-sep {
+  display: none;
+}
+.tile-w600 .center-cluster > .tb-btn {
+  display: none;
+}
+.tile-w600 .page-indicator {
+  gap: 3px;
+}
+.tile-w600 .page-indicator input {
+  width: 34px;
+}
+.tile-w600 .zoom-label {
+  min-width: 44px;
+}
+.tile-w600 .toolbar-center.is-split > .tb-btn,
+.tile-w600 .toolbar-center.is-split .page-indicator > span,
+.tile-w600 .toolbar-center.is-split .zoom-label,
+.tile-w600 .toolbar-center.is-split .cluster-close,
+.tile-w600 .toolbar:has(.toolbar-center.is-split) .tb-split > .tb-chevron {
+  display: none;
+}
+html.touch-ui .tile-w600 .tb-btn,
+html.touch-ui .tile-w600 .tb-chevron,
+.tile-w600 .tb-btn {
+  min-width: 34px;
+}
+.tile-w400 .center-cluster > .zoom-label,
+.tile-w400 .page-indicator > span {
+  display: none;
+}
+html.touch-ui .tile-w400 .tb-btn,
+html.touch-ui .tile-w400 .tb-chevron,
+.tile-w400 .tb-btn {
+  min-width: 32px;
+}
+
 
 /* Side-panel handles: no hover to hint them — keep them faintly visible
    and always tappable (tap = pin/unpin; edge swipe opens the panel too) */

@@ -8,7 +8,9 @@
 // fullscreen hides the system bars, the tab strip and the toolbar, and BACK
 // leaves it (the system bars come back); a pen stroke saved IN PLACE reaches
 // the file (an /Ink in its bytes); turning the device keeps the split and a
-// toolbar that fits; a cold restart brings both tabs back. Screenshots of each
+// toolbar that fits; a third document and the three-document mosaic, upright
+// and turned, every tile drawing with a toolbar that fits it; a cold restart
+// brings all three tabs back. Screenshots of each
 // state land in android-shots/ (CI uploads them).
 //
 // Needs adb on PATH and one device/emulator attached, and a debug APK (the
@@ -64,7 +66,7 @@ adb('shell', 'settings', 'put', 'secure', 'immersive_mode_confirmations', 'confi
 adb('install', '-r', '-g', APK)
 // Two documents in the app's own storage: readable through a file:// intent
 // without any storage permission, and writable, so «Save» goes in place
-for (const name of ['paper-a.pdf', 'paper-b.pdf']) {
+for (const name of ['paper-a.pdf', 'paper-b.pdf', 'paper-c.pdf']) {
   adb('push', SAMPLE, `/data/local/tmp/${name}`)
   adb('shell', 'run-as', PKG, 'mkdir', '-p', 'files')
   adb('shell', 'run-as', PKG, 'cp', `/data/local/tmp/${name}`, `files/${name}`)
@@ -285,14 +287,53 @@ check('portrait: the toolbar fits', (await toolbarFits()) === true, String(await
 check('portrait: the page is drawn', await waitInk())
 shot('6-portrait')
 
+// ---------- 5b. three documents at once (the mosaic) ----------
+
+openWith('paper-c.pdf')
+check('a third «Open with» adds a third tab', await waitFor(`document.querySelectorAll('.tab-label').length === 3`))
+await waitInk()
+await tap(`${ACTIVE} .theme-menu-anchor > .tb-btn[title="Zoom and page layout"]`)
+const showThree = await ev(`(() => { const b = [...document.querySelectorAll('${ACTIVE} .view-menu .menu-action')].find((x) => x.textContent.includes('Show three documents')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+check('the layout menu offers «Show three documents»', !!showThree)
+const TILES = `.tab-views.mosaic .tab-view[class*="tile-"]`
+const tileInk = () =>
+  ev(`[...document.querySelectorAll('${TILES}')].map((t) => { const c = [...t.querySelectorAll('canvas')].find((x) => x.width > 50); if (!c) return 0; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4 * 97) if (d[i] < 200) n++; return n })`)
+const tileBoxes = () =>
+  ev(`Object.fromEntries([...document.querySelectorAll('${TILES}')].map((e) => { const r = e.getBoundingClientRect(); return [[...e.classList].find((c) => /^tile-(main|top|bottom)$/.test(c)), [r.left, r.top, r.width, r.height].map(Math.round)] }))`)
+const tilesFit = () => ev(`[...document.querySelectorAll('${TILES} .toolbar')].every((t) => t.scrollWidth <= t.clientWidth + 1)`)
+if (showThree) {
+  await touch([showThree])
+  await waitFor(`document.querySelectorAll('${TILES}').length === 3`)
+  await sleep(2500)
+  check('mosaic: three documents on screen', (await ev(`document.querySelectorAll('${TILES}').length`)) === 3)
+  check('mosaic: every tile draws its page', (await tileInk()).every((n) => n > 10), (await tileInk()).join(','))
+  check('mosaic (upright): every toolbar fits its tile', await tilesFit())
+  const up = await tileBoxes()
+  check('mosaic (upright): one on the top half, two quarters below', up['tile-main'][1] < up['tile-top'][1] && up['tile-top'][1] === up['tile-bottom'][1] && up['tile-top'][0] < up['tile-bottom'][0], JSON.stringify(up))
+  shot('6b-mosaic-upright')
+  rotate(0)
+  await waitFor('window.innerWidth > window.innerHeight', 8000)
+  await sleep(2000)
+  const flat = await tileBoxes()
+  check('mosaic (landscape): one on the left half, two quarters on the right', flat['tile-main'][0] < flat['tile-top'][0] && flat['tile-top'][0] === flat['tile-bottom'][0] && flat['tile-top'][1] < flat['tile-bottom'][1], JSON.stringify(flat))
+  check('mosaic (landscape): every toolbar fits its tile', await tilesFit())
+  check('mosaic (landscape): every tile draws its page', (await tileInk()).every((n) => n > 10))
+  shot('6c-mosaic-landscape')
+  await tap(`.tab-view.focused .theme-menu-anchor > .tb-btn[title="Zoom and page layout"]`)
+  const back = await ev(`(() => { const b = [...document.querySelectorAll('.tab-view.focused .view-menu .menu-action')].find((x) => x.textContent.includes('Back to one document')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+  if (back) await touch([back])
+  await sleep(1000)
+  check('«Back to one document» ends the mosaic', (await ev(`document.querySelectorAll('.tab-views.mosaic').length`)) === 0)
+}
+
 // ---------- 6. a cold start brings the tabs back ----------
 
 await sleep(1000) // the strip is reported 300 ms after it changes
 adb('shell', 'am', 'force-stop', PKG)
 adb('shell', 'am', 'start', '-W', '-n', `${PKG}/.MainActivity`)
 await connect()
-check('after a restart both tabs are back', await waitFor(`document.querySelectorAll('.tab-label').length === 2`, 30000), (await tabNames()).join(' | '))
-check('…with their names', (await tabNames()).join() === 'paper-a.pdf,paper-b.pdf' || (await tabNames()).sort().join() === 'paper-a.pdf,paper-b.pdf', (await tabNames()).join(' | '))
+check('after a restart all three tabs are back', await waitFor(`document.querySelectorAll('.tab-label').length === 3`, 30000), (await tabNames()).join(' | '))
+check('…with their names', [...(await tabNames())].sort().join() === 'paper-a.pdf,paper-b.pdf,paper-c.pdf', (await tabNames()).join(' | '))
 check('…and the shown one draws its page', await waitInk(30000))
 shot('7-restarted')
 

@@ -22,6 +22,9 @@ import { browserCurrentBytes } from './annotation-engine-browser'
 import PdfViewer from './components/PdfViewer'
 import TabBar from './components/TabBar'
 import Welcome from './components/Welcome'
+import MosaicDrop, { MOSAIC_ROLES } from './components/MosaicDrop'
+import type { MosaicRole } from './components/MosaicDrop'
+import { dragCarriesTab } from './drag-types'
 import { DEFAULT_SETTINGS as FALLBACK_SETTINGS } from '../../shared/defaults'
 
 interface OpenTab {
@@ -200,6 +203,91 @@ export default function App(): React.JSX.Element {
 
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+
+  // ---------- The mosaic: three documents at once ----------
+  //
+  // One tab on half the window, two more on a quarter each — each a whole
+  // viewer with its own toolbar, side by side instead of stacked. The tiles
+  // are tabs that stay tabs: the strip still lists them, the focused one is
+  // the active tab (keyboard, title, strip highlight), and a tap in another
+  // tile moves the focus there. A tab dragged onto a tile (mouse, or finger —
+  // tab-touch-drag.ts) or tapped in the strip takes the FOCUSED tile's place;
+  // one that is already a tile trades places. Closing a tile's tab ends it.
+  const [mosaic, setMosaic] = useState<Record<MosaicRole, string> | null>(null)
+  const mosaicRef = useRef(mosaic)
+  mosaicRef.current = mosaic
+  const roleIn = (m: Record<MosaicRole, string> | null, id: string): MosaicRole | null =>
+    m ? (MOSAIC_ROLES.find((r) => m[r] === id) ?? null) : null
+
+  /** Put a tab into a tile; a tab that already holds another tile trades */
+  const placeInMosaic = useCallback((role: MosaicRole, id: string) => {
+    setMosaic((m) => {
+      if (!m || m[role] === id) return m
+      const from = roleIn(m, id)
+      return from ? { ...m, [role]: id, [from]: m[role] } : { ...m, [role]: id }
+    })
+    setActiveId(id)
+    setAtLibrary(false)
+  }, [])
+
+  /** The view menu's «Show three documents» / «Back to one document» */
+  const toggleMosaic = useCallback((hostId: string) => {
+    if (mosaicRef.current) {
+      setMosaic(null)
+      return
+    }
+    // The two tabs that follow this one in the strip (wrapping round) join it
+    const list = tabsRef.current
+    const at = list.findIndex((x) => x.id === hostId)
+    const others = [...list.slice(at + 1), ...list.slice(0, Math.max(0, at))]
+    if (at < 0 || others.length < 2) return
+    setMosaic({ main: hostId, top: others[0].id, bottom: others[1].id })
+    setActiveId(hostId)
+    setAtLibrary(false)
+  }, [])
+
+  // A tile's tab closed (or the strip changed under it): the mosaic ends
+  useEffect(() => {
+    if (mosaic && !MOSAIC_ROLES.every((r) => tabs.some((x) => x.id === mosaic[r]))) setMosaic(null)
+  }, [tabs, mosaic])
+
+  /** The window's size while the mosaic shows: a tile's width decides how far
+   *  its toolbar tightens (tile-w900/w600/w400 in app.css) — the media queries
+   *  that do it for a whole window only know the window */
+  const [viewSize, setViewSize] = useState({ w: window.innerWidth, h: window.innerHeight })
+  useEffect(() => {
+    if (!mosaic) return
+    const measure = (): void => setViewSize({ w: window.innerWidth, h: window.innerHeight })
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [mosaic])
+  const tileWidthClass = (role: MosaicRole): string => {
+    // Landscape: every tile is half the width. Portrait: the main tile spans it
+    const portrait = viewSize.h > viewSize.w
+    const w = portrait && role === 'main' ? viewSize.w : viewSize.w / 2
+    return `${w <= 900 ? ' tile-w900' : ''}${w <= 660 ? ' tile-w600' : ''}${w <= 420 ? ' tile-w400' : ''}`
+  }
+
+  /** A tab dragged anywhere in the window while the mosaic shows: lay the
+   *  tiles' drop zones over them until the drag ends */
+  const [tabDragging, setTabDragging] = useState(false)
+  useEffect(() => {
+    if (!mosaic) return
+    const start = (e: DragEvent): void => {
+      if (dragCarriesTab(e.dataTransfer)) setTabDragging(true)
+    }
+    const end = (): void => setTabDragging(false)
+    window.addEventListener('dragenter', start, true)
+    window.addEventListener('drop', end, true)
+    window.addEventListener('dragend', end, true)
+    return () => {
+      window.removeEventListener('dragenter', start, true)
+      window.removeEventListener('drop', end, true)
+      window.removeEventListener('dragend', end, true)
+      setTabDragging(false)
+    }
+  }, [mosaic])
   /** Same pattern: the shell key handler is bound once per dep change and
    *  must read the CURRENT theme when cycling, not the one at bind time. */
   const settingsRef = useRef(settings)
@@ -1052,9 +1140,11 @@ export default function App(): React.JSX.Element {
   const lazyLoadingRef = useRef(new Set<string>())
   useEffect(() => {
     if (atLibrary) return
-    const tab = tabs.find((x) => x.id === activeId)
+    // Every tab on screen: the active one, and in the mosaic all three tiles
+    const onScreen = mosaic ? MOSAIC_ROLES.map((r) => mosaic[r]) : [activeId]
+    for (const tab of tabs.filter((x) => onScreen.includes(x.id))) {
     // Lazy in the state but already taken: openPayload has its bytes in hand
-    if (!tab?.lazy || !lazyIdsRef.current.has(tab.id) || lazyLoadingRef.current.has(tab.id)) return
+    if (!tab.lazy || !lazyIdsRef.current.has(tab.id) || lazyLoadingRef.current.has(tab.id)) continue
     const { id } = tab
     lazyLoadingRef.current.add(id)
     void (async () => {
@@ -1074,7 +1164,8 @@ export default function App(): React.JSX.Element {
         prev.map((x) => (x.id === id ? { ...x, payload: result, initialPosition, lazy: false } : x))
       )
     })()
-  }, [tabs, activeId, atLibrary, reallyCloseTab])
+    }
+  }, [tabs, activeId, atLibrary, mosaic, reallyCloseTab])
 
   // Report the strip to main for the next launch (desktop; the bridge drops it
   // elsewhere). Debounced while the strip changes, and sent at once when the
@@ -1300,7 +1391,8 @@ export default function App(): React.JSX.Element {
           // Either document in the tab (its own, or the split column's other
           // file) having unsaved changes lights the dot
           dirty: dirtyTabs.has(t.id) || splitDirtyTabs.has(t.id),
-          pinned: t.pinned
+          pinned: t.pinned,
+          tiled: !!roleIn(mosaic, t.id)
         }))}
         // No tab is the current one while the library is showing — the strip
         // stays, so the open documents are visible and one click away from
@@ -1315,7 +1407,15 @@ export default function App(): React.JSX.Element {
         hidden={
           !atLibrary && (presenting || (fullscreen && (tabs.length < 2 || !chromeVisible)))
         }
-        onSelect={goToTab}
+        onSelect={(id) => {
+          // In the mosaic a tab that is not a tile takes the focused tile's place
+          const m = mosaicRef.current
+          if (m && !atLibraryRef.current && !roleIn(m, id)) {
+            placeInMosaic(roleIn(m, activeIdRef.current ?? '') ?? 'main', id)
+            return
+          }
+          goToTab(id)
+        }}
         onClose={closeTab}
         onNewTab={() => void openDialog()}
         onNewWindow={() => bridge.newWindow()}
@@ -1345,21 +1445,35 @@ export default function App(): React.JSX.Element {
           there is no place to restore, because the viewer never stopped
           existing. Unmounting here instead would throw away scroll position,
           zoom, the split, open panels and any unsaved draft. */}
-      <div className="tab-views">
+      <div className={`tab-views${mosaic && !atLibrary ? ' mosaic' : ''}`}>
         {tabs.map((tab) => {
-          const showing = tab.id === activeId && !atLibrary
+          // In the mosaic, its three tiles show at once (the focused one is
+          // the active tab); otherwise the active tab alone
+          const role = atLibrary ? null : roleIn(mosaic, tab.id)
+          const showing = role ? true : !mosaic && tab.id === activeId && !atLibrary
+          const tile = role
+            ? ` tile-${role}${tab.id === activeId ? ' focused' : ''}${tileWidthClass(role)}`
+            : ''
           // A restored tab not shown yet has no document to mount; shown, it
           // is the empty page ground for the moment its file takes to read
           if (tab.lazy) {
             return (
               <div
                 key={`${tab.id}:${tab.epoch}`}
-                className={`tab-view tab-pending${showing ? ' active' : ''}`}
+                className={`tab-view tab-pending${showing ? ' active' : ''}${tile}`}
               />
             )
           }
           return (
-            <div key={`${tab.id}:${tab.epoch}`} className={`tab-view${showing ? ' active' : ''}`}>
+            <div
+              key={`${tab.id}:${tab.epoch}`}
+              className={`tab-view${showing ? ' active' : ''}${tile}`}
+              // A touch or click in another tile makes it the focused one —
+              // before the gesture reaches the viewer, so it lands there
+              onPointerDownCapture={
+                role ? () => activeIdRef.current !== tab.id && setActiveId(tab.id) : undefined
+              }
+            >
               {tab.staleOnDisk && (
                 <div className="disk-change-bar" role="status">
                   <span>{t('app.changedOnDisk', { name: tab.payload.name })}</span>
@@ -1381,7 +1495,7 @@ export default function App(): React.JSX.Element {
               <PdfViewer
                 payload={tab.payload}
                 initialPosition={tab.initialPosition}
-                active={showing}
+                active={tab.id === activeId && !atLibrary}
                 settings={settings}
                 resolvedTheme={resolvedTheme}
                 onSettingsChange={updateSettings}
@@ -1406,10 +1520,28 @@ export default function App(): React.JSX.Element {
                     : undefined
                 }
                 onRequestOpenOtherInSplit={hasAppTabs ? () => void openOtherInSplit(tab.id) : undefined}
+                mosaic={
+                  hasAppTabs
+                    ? {
+                        open: !!roleIn(mosaic, tab.id),
+                        canOpen: tabs.length >= 3,
+                        onToggle: () => toggleMosaic(tab.id)
+                      }
+                    : undefined
+                }
               />
             </div>
           )
         })}
+        {mosaic && tabDragging && !atLibrary && (
+          <MosaicDrop
+            onDrop={(role, path) => {
+              setTabDragging(false)
+              const dropped = tabsRef.current.find((x) => x.payload.path === path)
+              if (dropped) placeInMosaic(role, dropped.id)
+            }}
+          />
+        )}
         {/* With nothing open the library is not a choice, it is all there is */}
         {(atLibrary || tabs.length === 0) && (
           <div className="tab-view active">

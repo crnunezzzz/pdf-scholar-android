@@ -142,6 +142,7 @@ import {
   IconSignature,
   IconSparkle,
   IconSplit,
+  IconMosaic,
   IconFolderOpen,
   IconSwapPanes,
   IconNote,
@@ -199,6 +200,15 @@ const ZOOM_PRESETS = [50, 75, 100, 125, 150, 200, 400] as const
  *  shows on a plain desktop. maxTouchPoints, not (pointer: coarse): a Surface
  *  with its keyboard attached has a fine primary pointer AND a touch screen. */
 const HAS_TOUCH = navigator.maxTouchPoints > 0
+
+/** The view menu's handle on App's three-document mosaic */
+export interface MosaicControl {
+  /** This tab is one of the three tiles right now */
+  open: boolean
+  /** Enough tabs are open to fill the other two tiles */
+  canOpen: boolean
+  onToggle(): void
+}
 
 interface Props {
   page: number
@@ -349,6 +359,9 @@ interface Props {
   splitCandidates?:
     | { docs: { name: string; path: string }[]; onOpen(path: string): void; onOpenOther(): void }
     | undefined
+  /** The three-document mosaic (App): one document on half the window, two
+   *  on a quarter each. Undefined where the platform has no tabs. */
+  mosaic?: MosaicControl | undefined
   activePane: 'a' | 'b'
   onActivatePane(pane: 'a' | 'b'): void
   /** Close one named column, keeping the other's content */
@@ -551,6 +564,7 @@ export default function Toolbar({
   onSwapPanes,
   onToggleSplit,
   splitCandidates,
+  mosaic,
   activePane,
   onActivatePane,
   onClosePane,
@@ -1886,6 +1900,30 @@ export default function Toolbar({
                     {t('tb.splitOtherFile')}
                   </button>
                   <div className="menu-hint">{t('tb.splitDropHint')}</div>
+                </>
+              )}
+              {/* Three documents at once: this one on half the window, two
+                  more on a quarter each (App's mosaic) */}
+              {mosaic && (
+                <>
+                  <div className="theme-menu-sep" />
+                  <div className="theme-menu-label">{t('tb.mosaic')}</div>
+                  <button
+                    className={`menu-action${mosaic.open ? ' is-active' : ''}`}
+                    disabled={!mosaic.open && !mosaic.canOpen}
+                    onClick={() => {
+                      setViewMenuOpen(false)
+                      mosaic.onToggle()
+                    }}
+                  >
+                    <IconMosaic size={15} />
+                    <span className="menu-action-text">
+                      {t(mosaic.open ? 'tb.mosaicClose' : 'tb.mosaicOpen')}
+                    </span>
+                  </button>
+                  <div className="menu-hint">
+                    {t(mosaic.open || mosaic.canOpen ? 'tb.mosaicHint' : 'tb.mosaicNeedThree')}
+                  </div>
                 </>
               )}
             </div>

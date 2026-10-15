@@ -16,6 +16,8 @@ export interface TabInfo {
   dirty?: boolean
   /** Pinned (issue #29): first in the strip, no close cross */
   pinned?: boolean
+  /** One of the mosaic's three tiles (App): on screen beside the active tab */
+  tiled?: boolean
 }
 
 interface Props {
@@ -204,7 +206,7 @@ export default function TabBar({
       {tabs.map((tab, index) => (
         <div
           key={tab.id}
-          className={`tab${tab.id === activeId ? ' active' : ''}${tab.id === draggingId ? ' dragging' : ''}${tab.pinned ? ' pinned' : ''}`}
+          className={`tab${tab.id === activeId ? ' active' : ''}${tab.id === draggingId ? ' dragging' : ''}${tab.pinned ? ' pinned' : ''}${tab.tiled ? ' tiled' : ''}`}
           title={tab.path}
           // Android: a finger drags through tab-touch-drag.ts (the WebView
           // starts no HTML5 drag for one), so the element stays undraggable there

@@ -162,6 +162,7 @@ import PresentationMode from './PresentationMode'
 import Sidebar from './Sidebar'
 import SearchBar from './SearchBar'
 import Toolbar from './Toolbar'
+import type { MosaicControl } from './Toolbar'
 import { NotePopover, SelectionMenu } from './SelectionMenu'
 import { inTextField } from './TextContextMenu'
 import type { MenuAction, MenuState } from './SelectionMenu'
@@ -448,6 +449,8 @@ interface Props {
   /** Desktop: the open documents, listed under «Åpne i delt visning» in
    *  the view menu */
   splitCandidates?: { name: string; path: string }[] | undefined
+  /** App's three-document mosaic, offered in the view menu */
+  mosaic?: MosaicControl | undefined
   /** «Annen fil …» in that menu — App shows the picker and opens the pick in the split */
   onRequestOpenOtherInSplit?: (() => void) | undefined
 }
@@ -523,6 +526,7 @@ export default function PdfViewer({
   onRequestOpenInSplit,
   sameSplitNonce,
   splitCandidates,
+  mosaic,
   onRequestOpenOtherInSplit
 }: Props): React.JSX.Element {
   useLang()
@@ -7375,6 +7379,7 @@ export default function PdfViewer({
                 }
               : undefined
           }
+          mosaic={mosaic}
           onClosePane={closePane}
           activePane={activePane}
           onActivatePane={activatePane}

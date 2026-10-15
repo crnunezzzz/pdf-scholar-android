@@ -65,6 +65,19 @@ shared renderer; only the platform layer is new. Tier and divergences:
   seconds; the same button, or Back, leaves. Returning to the app keeps it
   fullscreen. The very first time, Android itself shows a «Viewing full
   screen» notice that holds Back until it is tapped away — once per install.
+- **Two documents side by side**: put a finger on a tab and drag it onto the
+  left or right half of the pages (`src/renderer/src/tab-touch-drag.ts` turns
+  the finger's gesture into the drag events a mouse drag delivers, so the
+  desktop's drop targets and hints work unchanged). While the tab strip
+  scrolls, a sideways swipe scrolls it and the drag starts by pulling down
+  or after a short hold; a hold released in place opens the tab's menu. The
+  layout menu's «Open in split view» list does the same without a drag.
+- **Three documents at once** (the mosaic, desktop too): the layout menu's
+  «Show three documents» puts this tab on half the window and the next two
+  on a quarter each — left half and right quarters in landscape, top half and
+  bottom quarters upright. Each tile is a whole viewer; a tap focuses one; a
+  tab dragged onto a tile, or tapped in the strip, takes that place.
+  «Back to one document» ends it, as does closing a tile's tab.
 - **Back button** leaves fullscreen first; otherwise it sends the app to the
   background (tabs stay as they were). The session restores the tab strip
   after the app is closed.

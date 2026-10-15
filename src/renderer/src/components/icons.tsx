@@ -646,6 +646,14 @@ export const IconView = (p: IconProps): React.JSX.Element => (
 )
 
 /** Split view: one frame divided into two reading columns */
+/** Three documents: one half, two quarters (the mosaic) */
+export const IconMosaic = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <rect x="2.5" y="4" width="19" height="16" rx="2" />
+    <path d="M12 4v16M12 12h9.5" />
+  </Svg>
+)
+
 export const IconSplit = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
     <rect x="2.5" y="4" width="19" height="16" rx="2" />
