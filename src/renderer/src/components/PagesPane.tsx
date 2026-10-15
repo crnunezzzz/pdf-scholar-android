@@ -599,7 +599,7 @@ export default function PagesPane({
 
     const onStart = (e: TouchEvent): void => {
       if (drawTool || e.touches.length < 2) return
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       if (pinch.active) return
       const mid = {
         x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
@@ -613,7 +613,7 @@ export default function PagesPane({
       const g = gestureRef.current
       const inner = innerRef.current
       if (!pinch.active || !g || !inner || e.touches.length < 2 || pinch.startDist <= 0) return
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       const target = clampZoom(scaleRef.current * (dist(e.touches) / pinch.startDist))
       g.factor = target / scaleRef.current
       inner.style.transform = `scale(${g.factor})`

@@ -286,6 +286,39 @@ button {
   background: var(--hover);
 }
 
+/* Android: a finger on a tab drags it (tab-touch-drag.ts). While the strip
+   fits, the finger belongs to the tab outright — with pan-x a diagonal pull
+   toward the pages was taken by the browser and cancelled the drag. Once
+   the strip scrolls, a sideways swipe scrolls it, and the drag starts with
+   a pull downward or a short hold. */
+.platform-android .tab {
+  touch-action: pan-x;
+}
+.platform-android .tab-bar.strip-fits .tab {
+  touch-action: none;
+}
+
+/* The tab under a finger drag, following it (tab-touch-drag.ts) */
+.tab-touch-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  margin: -46px 0 0 -48px;
+  max-width: 220px;
+  padding: 7px 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: var(--shadow-menu);
+  pointer-events: none;
+  z-index: 1000;
+}
+
 .tab.active {
   background: var(--bg-chrome);
   color: var(--text);
@@ -382,6 +415,84 @@ button {
 
 .tab-view.active {
   visibility: visible;
+}
+
+/* ---- The mosaic (App): three documents at once — one on half the window,
+   two on a quarter each. Landscape: the half on the left, the quarters
+   stacked on the right. Portrait: the half on top, the quarters side by side
+   below. The 4 px between tiles is the container's border colour showing
+   through; the focused tile (the active tab) wears a thin accent frame. ---- */
+.tab-views.mosaic {
+  --gap: 2px;
+  background: var(--border);
+}
+.tab-views.mosaic .tab-view {
+  overflow: hidden;
+}
+.tab-views.mosaic .tile-main {
+  inset: 0 calc(50% + var(--gap)) 0 0;
+}
+.tab-views.mosaic .tile-top {
+  inset: 0 0 calc(50% + var(--gap)) calc(50% + var(--gap));
+}
+.tab-views.mosaic .tile-bottom {
+  inset: calc(50% + var(--gap)) 0 0 calc(50% + var(--gap));
+}
+@media (orientation: portrait) {
+  .tab-views.mosaic .tile-main {
+    inset: 0 0 calc(50% + var(--gap)) 0;
+  }
+  .tab-views.mosaic .tile-top {
+    inset: calc(50% + var(--gap)) calc(50% + var(--gap)) 0 0;
+  }
+  .tab-views.mosaic .tile-bottom {
+    inset: calc(50% + var(--gap)) 0 0 calc(50% + var(--gap));
+  }
+}
+.tab-views.mosaic .tab-view.focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  pointer-events: none;
+  z-index: 60;
+}
+
+/* A tile's tab in the strip: on screen, though not the focused one */
+.tab.tiled:not(.active) {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* The tiles' drop zones while a tab is dragged (MosaicDrop.tsx) */
+.mosaic-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+}
+.mosaic-zone {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 6px;
+  border: 2px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-canvas) 55%, transparent);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.mosaic-zone.is-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.mosaic-zone > span {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-menu);
+  padding: 8px 14px;
+  font-size: 13px;
+  pointer-events: none;
 }
 
 /* The file changed on disk under a tab holding unsaved marks (issue #41): a
@@ -1278,6 +1389,12 @@ button {
   z-index: 29;
 }
 
+/* A finger never hovers, and the strip sat on top of the pages' container —
+   it swallowed the start of the swipe down that reveals the toolbar by touch */
+html.touch-ui .reveal-zone {
+  pointer-events: none;
+}
+
 /* ---- Edge rails: the strip is a pure positioning container and NEVER takes
    pointer events (the pages scrollbar lives at the right edge and must stay
    draggable). Nearing an edge fades the handle in (.hint, set from a window
@@ -1438,6 +1555,9 @@ button {
   align-items: center;
   gap: 5px;
   color: var(--text-secondary);
+  /* «/ 6» on one line: a crowded toolbar (the split's column switcher in a
+     1280 px window) squeezed it onto two before folding a button away */
+  white-space: nowrap;
 }
 
 .page-indicator input {
@@ -2324,11 +2444,247 @@ html.pen-near .draw-layer {
   font-size: 13px;
 }
 
+/* The split button's «which document beside it?» (SplitPicker): a panel
+   over the right half of the pages, where the second column will stand — the
+   way to a two-document split that needs no drag. The left half stays the
+   document, lightly veiled; a tap there puts the question away. */
+.split-picker-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--bg-canvas) 35%, transparent);
+}
+
+.split-picker {
+  width: 50%;
+  min-width: min(320px, 100%);
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 16px 14px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-menu);
+  outline: none;
+  overflow: hidden;
+}
+
+.split-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.split-picker-title {
+  flex: 1;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.split-picker-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.split-picker-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* 1 / 2 / 3 documents: a segmented choice, each segment a finger-sized target */
+.split-picker-layouts {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.split-picker-layout {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.split-picker-layout:hover,
+.split-picker-layout:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.split-picker-layout.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.split-picker-layout[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.split-picker-layout-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.split-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+
+.split-picker-search:focus-within {
+  border-color: var(--accent);
+}
+
+.split-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.split-picker-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Rows a finger can hit: 52 px, the whole width */
+.split-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.split-picker-item > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.split-picker-item:hover,
+.split-picker-item:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.split-picker-item:active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.split-picker-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.split-picker-name {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-picker-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.split-picker-other {
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  margin-top: 4px;
+}
+
+.split-picker-empty,
+.split-picker-hint {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* A narrow window has no half to spare: the panel takes the width */
+@media (max-width: 600px) {
+  .split-picker {
+    width: 100%;
+  }
+}
+
 /* The toolbar's "…" overflow dropdown (narrow screens): a compact action list,
    narrower than the settings/theme menus. */
 .overflow-menu {
   min-width: 184px;
+  max-width: calc(100vw - 16px);
   padding: 6px;
+}
+
+/* A folded tool's options (Shapes, Pen, Text …) open INSIDE the "…" menu,
+   below its rows. Positioned absolutely as under an inline button, the panel
+   sat on top of the menu's first rows and was clipped by the menu's own
+   scroll box — the swatches and the width slider cut off at the right and the
+   opacity slider at the bottom (a tablet, 2026-10-15). In the flow, the menu
+   widens to fit it and scrolls to it (Toolbar.tsx). */
+.overflow-menu .tool-menu {
+  position: static;
+  min-width: 0;
+  max-height: none;
+  overflow: visible;
+  margin: 6px 0 0;
+  padding: 10px 6px 4px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
 }
 
 .menu-hint {
@@ -8201,6 +8557,136 @@ html.touch-ui .cluster-close {
 html.touch-ui .toolbar {
   height: 54px;
 }
+
+/* The split in a narrow window (a tablet held upright, 800 px): the column
+   switcher and «swap sides» join a core that folding cannot shrink, and «…»
+   went off the right edge. The zoom
+   steps give way (pinch, the percentage and the layout menu remain). */
+@media (max-width: 900px) {
+  .toolbar-center.is-split .center-cluster > .tb-btn {
+    display: none;
+  }
+}
+
+/* A phone held upright (the Android app, docs/ANDROID.md). Folding buttons
+   into "…" (Toolbar.tsx, measureOverflow) stops at the irreducible core, and
+   at ~400 px that core alone was wider than the screen — the "…" and the gear
+   sat off its right edge, out of reach. So the core itself tightens here: no
+   dividers, no zoom steps (pinch zooms, the percentage opens the exact value,
+   the layout menu has the presets and both fits) and a narrower page field.
+   The sidebar button goes too: its edge handle and the swipe in from the
+   left are always there under touch-ui, and the room is the fullscreen
+   button's, which Android keeps inline. Nothing below this width exists on
+   the desktop reference. */
+@media (max-width: 600px) {
+  .toolbar > .toolbar-group:first-child > .tb-btn:nth-of-type(2) {
+    display: none;
+  }
+  .toolbar {
+    gap: 2px;
+    padding: 0 4px;
+  }
+  .toolbar .toolbar-sep {
+    display: none;
+  }
+  .center-cluster > .tb-btn {
+    display: none;
+  }
+  .page-indicator {
+    gap: 3px;
+  }
+  .page-indicator input {
+    width: 34px;
+  }
+  .zoom-label {
+    min-width: 44px;
+  }
+  /* Split on a phone: the column switcher joins the core, so «swap sides»,
+     the column's own close (the split also closes from «…»), the page count,
+     the zoom value and the save menu's chevron (Save itself stays) give way
+     — or the core overran its own buttons */
+  .toolbar-center.is-split > .tb-btn,
+  .toolbar-center.is-split .page-indicator > span,
+  .toolbar-center.is-split .zoom-label,
+  .toolbar-center.is-split .cluster-close,
+  .toolbar:has(.toolbar-center.is-split) .tb-split > .tb-chevron {
+    display: none;
+  }
+  /* Finger-sized still (34 px, Android's own 32 dp floor is below it), but
+     the 38 px of touch-ui left the core 12 px over at 412 px with tabs open */
+  html.touch-ui .tb-btn,
+  html.touch-ui .tb-chevron,
+  .tb-btn {
+    min-width: 34px;
+  }
+}
+
+/* The narrowest phones (360 px class): still one control too many. The zoom
+   value lives in the layout menu beside it, the page count in the page pill,
+   and the buttons give up a few more pixels each. */
+@media (max-width: 400px) {
+  .center-cluster > .zoom-label,
+  .page-indicator > span {
+    display: none;
+  }
+  html.touch-ui .tb-btn,
+  html.touch-ui .tb-chevron,
+  .tb-btn {
+    min-width: 32px;
+  }
+}
+
+/* The mosaic's tiles (App) are narrower than the window: the same tightening
+   as the three blocks above, keyed to a tile's OWN width — App gives a tile
+   tile-w900 / tile-w600 / tile-w400 from its size, since a media query only
+   knows the window's. Generated from those blocks; change them together. */
+.tile-w900 .toolbar-center.is-split .center-cluster > .tb-btn {
+  display: none;
+}
+.tile-w600 .toolbar > .toolbar-group:first-child > .tb-btn:nth-of-type(2) {
+  display: none;
+}
+.tile-w600 .toolbar {
+  gap: 2px;
+  padding: 0 4px;
+}
+.tile-w600 .toolbar .toolbar-sep {
+  display: none;
+}
+.tile-w600 .center-cluster > .tb-btn {
+  display: none;
+}
+.tile-w600 .page-indicator {
+  gap: 3px;
+}
+.tile-w600 .page-indicator input {
+  width: 34px;
+}
+.tile-w600 .zoom-label {
+  min-width: 44px;
+}
+.tile-w600 .toolbar-center.is-split > .tb-btn,
+.tile-w600 .toolbar-center.is-split .page-indicator > span,
+.tile-w600 .toolbar-center.is-split .zoom-label,
+.tile-w600 .toolbar-center.is-split .cluster-close,
+.tile-w600 .toolbar:has(.toolbar-center.is-split) .tb-split > .tb-chevron {
+  display: none;
+}
+html.touch-ui .tile-w600 .tb-btn,
+html.touch-ui .tile-w600 .tb-chevron,
+.tile-w600 .tb-btn {
+  min-width: 34px;
+}
+.tile-w400 .center-cluster > .zoom-label,
+.tile-w400 .page-indicator > span {
+  display: none;
+}
+html.touch-ui .tile-w400 .tb-btn,
+html.touch-ui .tile-w400 .tb-chevron,
+.tile-w400 .tb-btn {
+  min-width: 32px;
+}
+
 
 /* Side-panel handles: no hover to hint them — keep them faintly visible
    and always tappable (tap = pin/unpin; edge swipe opens the panel too) */

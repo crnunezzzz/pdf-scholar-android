@@ -1,0 +1,52 @@
+# The Android app (docs/ANDROID.md): the renderer built into dist-android/,
+# synced into the Capacitor project under android/, and packaged as an APK.
+# Every push builds it, so a renderer change that breaks the Android target
+# fails here; the APK is attached to the run as an artifact to install by hand.
+name: Android
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      # Capacitor 8's Android project wants JDK 21; the runner image already
+      # carries the Android SDK (ANDROID_HOME) with its licences accepted
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - run: npm ci
+        env:
+          # The desktop runtime is not needed to build the Android app
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run typecheck
+      # The bundled twins for fonts a PDF names but does not embed
+      - run: npm run test:pdf-fonts
+      # dist-android/ → android/app/src/main/assets/public, plus the generated
+      # capacitor-cordova-android-plugins project the app module depends on
+      - run: npm run android:sync
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+      - name: Name the APK after the version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk "apk/PDF-Scholar-${version}-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-scholar-android-apk
+          path: apk/*.apk
+          if-no-files-found: error

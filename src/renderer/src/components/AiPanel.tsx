@@ -155,7 +155,7 @@ interface PanelProps {
   onRequestSnip?(): void
   /** Detach the chat into its own window/tab. Only the DOCKED host passes it
    *  (a detached window has nowhere further to go). */
-  onDetach?(): void
+  onDetach?: (() => void) | undefined
   /** Whole pages rendered as images, for a document with no text layer. Staged
    *  like a snip: they land in the composer with an editable question, and the
    *  chip says exactly which pages will go along — nothing is sent by itself. */

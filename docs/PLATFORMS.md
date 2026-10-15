@@ -21,6 +21,7 @@ One-time fees (Microsoft Partner Center, Chrome Web Store) are acceptable.
 | Extension (Edge/Chrome) | 1 | `pdf-scholar-extension.zip` | store auto-update; sideload = in-app notice |
 | macOS 11+ (arm64 + x64) | 2 | `PDF-Scholar-<v>-arm64.dmg` / `-x64.dmg` — **unsigned** | detect-only: in-app notice with the `brew upgrade` command (see below); no self-install |
 | Linux x64 | 2 | `PDF-Scholar-<v>.AppImage` + `.deb` | electron-updater |
+| Android 7+ (phone, tablet) | 3 | `PDF-Scholar-<v>-debug.apk` — CI artifact of `.github/workflows/android.yml`, **debug-signed**, sideloaded | none: install the next APK over it |
 
 The Microsoft Store is a live release channel, not a plan: the same Windows build
 ships there as MSIX, which removes the SmartScreen "unknown publisher" warning the
@@ -29,7 +30,7 @@ GitHub exe cannot escape. Build it with `npm run dist:store`; publishing is
 
 Deferred (revisit deliberately, don't drift into them): Linux arm64 (free GitHub
 arm runners exist when wanted), Firefox port of the extension (≈days of work,
-unlocks Firefox for Android too), PWA/iPad/Android.
+unlocks Firefox for Android too), PWA/iPad. Android is in as tier 3 (below).
 
 **Tier 1** — full feature parity, manually verified, release-blocking.
 **Tier 2** — same renderer and features *by construction* (shared code, `PdfxApi`
@@ -37,6 +38,9 @@ abstraction), built and packaged in CI on every push, but not manually verified
 per release (no owner hardware — macOS has had hands-on testing on a tester's
 Apple machine as of v0.34.0; Linux has not run on real hardware). User-reported
 regressions are treated as bugs, not as acceptable platform lag.
+**Tier 3** — Android (`docs/ANDROID.md`): the same renderer in a Capacitor
+WebView, built into an APK in CI on every push, never verified on hardware by
+the owner. It is held to the divergences below (31) and nothing else.
 
 ## Allowed divergences (the complete list)
 
@@ -585,6 +589,35 @@ regressions are treated as bugs, not as acceptable platform lag.
     re-opened by hand (the tab's reload), exactly as Edge's own viewer has it.
     `onFileChangedOnDisk` is a no-op in `bridge.ts`. Covered by
     `npm run test:disk-reload` (desktop session).
+31. **Android is the browser renderer with the device's files** (2026-10-14,
+    `src/renderer/src/android-api.ts`, `docs/ANDROID.md`). Annotations, AI,
+    tabs, the two-document split and the session work as on the desktop — the
+    engine is the in-renderer EmbedPDF of the extension, AI is the extension's
+    key-in-page client (only providers that answer CORS; no ChatGPT sign-in).
+    Missing: Zotero (no desktop filesystem), the file watcher (divergence 30),
+    cross-window sync and the detached assistant (one window), auto-update,
+    the file-icon setting, native tab drag. Documents are `content://` URIs
+    from the system picker; one another app hands over read-only is saved
+    through «Save as». pdf.js is its LEGACY build there (Android System
+    WebView lags the desktop Chromium). Below 600 px the toolbar's core
+    tightens (`app.css`, «A phone held upright») — no desktop window is that
+    narrow. Fullscreen there also tucks the toolbar (the desktop keeps the two
+    independent), its button never folds into «…», and Back leaves it.
+    A finger drags a tab (tab-touch-drag.ts) where the desktop's mouse
+    starts an HTML5 drag; the drop targets are the same. The three-document
+    mosaic exists where the app owns its tabs (desktop, Android) — the
+    extension's documents are browser tabs, so it has none there.
+    A font the PDF names but does not embed is drawn with a bundled
+    metric-compatible twin there (`pdf-fonts.ts`); the desktop uses the
+    system's real font.
+    The split-view button asks which document goes beside this one
+    (`SplitPicker.tsx`, 2026-10-15) wherever the app owns its tabs, desktop
+    included; on Android it is also the LAST button to fold into «…» (the
+    desktop folds it first — it has the 's' key, which stays the instant
+    same-file split everywhere). The same panel opens with a 1 / 2 / 3
+    documents choice: 1 puts the question away (and ends the mosaic), 2 lists
+    the documents, 3 stands the three-document mosaic up at once (waiting for
+    a third tab); from a mosaic tile it opens with 3 chosen.
 
 ## Maintenance rules
 

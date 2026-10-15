@@ -5,6 +5,8 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { TextContextMenu } from './components/TextContextMenu'
 import { parseAssistantTarget } from '../../shared/viewer-url'
 import { initTouchUi } from './touch-ui'
+import { isAndroid } from './bridge'
+import { installPdfFallbackFonts } from './pdf-fonts'
 import './styles/app.css'
 // pdf.js's own stylesheet for the XFA form layer (Apache-2.0, see the file)
 import './styles/xfa-layer.css'
@@ -38,6 +40,12 @@ if (import.meta.env.DEV && !window.api) {
 // for that document instead of the full app (main opens it that way in
 // createAssistantWindow; dev:web via bridge.openAssistant).
 const assistantFor = parseAssistantTarget(location.href)
+
+// Android: fonts a PDF names but does not embed get metric-identical bundled
+// twins instead of the device's generic face (pdf-fonts.ts)
+if (isAndroid) installPdfFallbackFonts()
+// CSS that only the Android app wants (the tab strip's touch gestures)
+if (isAndroid) document.documentElement.classList.add('platform-android')
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>

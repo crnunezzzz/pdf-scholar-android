@@ -21,7 +21,7 @@ import type {
   ThemeName,
   ViewRotation
 } from '../../../shared/types'
-import { bridge, isElectron, isExtension } from '../bridge'
+import { bridge, isAndroid, isElectron, isExtension, writesInPlace } from '../bridge'
 import { isSharedWith, markSharedWith } from '../ai-sharing'
 import { useDropTarget } from './useDropTarget'
 import { useDocumentDrag } from './useDocumentDrag'
@@ -162,6 +162,8 @@ import PresentationMode from './PresentationMode'
 import Sidebar from './Sidebar'
 import SearchBar from './SearchBar'
 import Toolbar from './Toolbar'
+import type { MosaicControl } from './Toolbar'
+import SplitPicker from './SplitPicker'
 import { NotePopover, SelectionMenu } from './SelectionMenu'
 import { inTextField } from './TextContextMenu'
 import type { MenuAction, MenuState } from './SelectionMenu'
@@ -448,6 +450,8 @@ interface Props {
   /** Desktop: the open documents, listed under «Åpne i delt visning» in
    *  the view menu */
   splitCandidates?: { name: string; path: string }[] | undefined
+  /** App's three-document mosaic, offered in the view menu */
+  mosaic?: MosaicControl | undefined
   /** «Annen fil …» in that menu — App shows the picker and opens the pick in the split */
   onRequestOpenOtherInSplit?: (() => void) | undefined
 }
@@ -523,6 +527,7 @@ export default function PdfViewer({
   onRequestOpenInSplit,
   sameSplitNonce,
   splitCandidates,
+  mosaic,
   onRequestOpenOtherInSplit
 }: Props): React.JSX.Element {
   useLang()
@@ -596,7 +601,7 @@ export default function PdfViewer({
   const [error, setError] = useState<string | null>(null)
   /** Edge-style toolbar auto-hide. Pinned (default) = always visible; unpinned
    *  = tucks away and reveals on top-edge hover. Persisted across sessions. */
-  const [toolbarPinned, setToolbarPinned] = useState(loadToolbarPinned)
+  const [toolbarPinnedPref, setToolbarPinned] = useState(loadToolbarPinned)
   const [toolbarPeek, setToolbarPeek] = useState(false)
   /** Margin view: notes + annotation comments as always-visible cards in a
    *  column beside each page (both panes). The gutter it needs is reserved
@@ -671,6 +676,16 @@ export default function PdfViewer({
   const fitModeRef = useRef(fitMode)
   fitModeRef.current = fitMode
   const [fullscreen, setFullscreen] = useState(false)
+  /** The toolbar as it shows now. On Android, fullscreen is the phone's
+   *  reading mode — the page and nothing else — so the toolbar tucks away
+   *  like an unpinned one (a swipe down from the top brings it back) while
+   *  the reader's own pin choice waits for fullscreen to end. The desktop
+   *  keeps the two independent. */
+  const toolbarPinned = toolbarPinnedPref && !(isAndroid && fullscreen)
+  const fullscreenRef = useRef(fullscreen)
+  fullscreenRef.current = fullscreen
+  /** Set where toggleFullscreen is defined (below togglePin, which calls it) */
+  const toggleFullscreenRef = useRef<() => void>(() => {})
   const [toast, setToast] = useState<string | null>(null)
   const [menu, setMenu] = useState<MenuState | null>(null)
   /** «Sammendrag» chosen in the selection menu: the selected reference's text
@@ -1104,6 +1119,25 @@ export default function PdfViewer({
     openSameFileSplit()
   }, [rememberPaneB, openSameFileSplit, requestSplitDoc])
   toggleSplitRef.current = toggleSplit
+
+  /** The split-view BUTTON (the toolbar's, and its row in «…»): where the
+   *  host can put another document in the second column, opening the split
+   *  first asks WHICH (SplitPicker over the right half) — this document, an
+   *  open tab, or another file. Closing, and the 's' key, stay toggleSplit. */
+  const [splitPicking, setSplitPicking] = useState(false)
+  const canPickSplit = !!(onRequestOpenInSplit && onRequestOpenOtherInSplit && splitCandidates)
+  const splitButton = useCallback(() => {
+    if (!splitOpenRef.current && !foreignRef.current && canPickSplit) {
+      setSplitPicking((open) => !open)
+      return
+    }
+    setSplitPicking(false)
+    toggleSplit()
+  }, [canPickSplit, toggleSplit])
+  // However the column came to open (the picker, a drop, 's'), the question is answered
+  useEffect(() => {
+    if (splitOpen) setSplitPicking(false)
+  }, [splitOpen])
 
   /** A document dropped on a column — a tab from the strip or a PDF from the
    *  OS — lands WHERE it was dropped (Emil, 2026-09-03: not always on the
@@ -2294,14 +2328,36 @@ export default function PdfViewer({
   // above the viewer's top edge, hovering it — or just shoving the pointer to
   // the very top of the screen — reveals the toolbar. Retract stays with the
   // toolbar-wrap's onMouseLeave so open dropdowns are never yanked away.
+  // A finger never hovers: after a tap Chromium sends compatibility mouse
+  // events at the tap's point — and, when the tap changed the layout under
+  // it, mouse-type pointerover/enter boundary events too. Tapping the unpin or
+  // fullscreen button sat exactly where the reveal strip appears, so the
+  // toolbar came back the instant it tucked, for good. Anything mouse-like
+  // within a beat of a touch is that echo, not a hover; a finger has the
+  // swipe down from the top (the touch effect below).
+  const lastTouchRef = useRef(0)
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') lastTouchRef.current = performance.now()
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('pointerup', onDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointerup', onDown, true)
+    }
+  }, [])
+  const isHover = (e: PointerEvent | React.PointerEvent): boolean =>
+    e.pointerType !== 'touch' && performance.now() - lastTouchRef.current > 1000
   useEffect(() => {
     if (!active || !immersive) return
-    const onMove = (e: MouseEvent): void => {
+    const onMove = (e: PointerEvent): void => {
+      if (!isHover(e)) return
       const top = viewerRootRef.current?.getBoundingClientRect().top ?? 0
       if (e.clientY <= top + 14) setToolbarPeek(true)
     }
-    window.addEventListener('mousemove', onMove)
-    return () => window.removeEventListener('mousemove', onMove)
+    window.addEventListener('pointermove', onMove)
+    return () => window.removeEventListener('pointermove', onMove)
   }, [active, immersive])
 
   // Edge-rail handles fade in when the pointer nears a side edge. This is a
@@ -2702,6 +2758,10 @@ export default function PdfViewer({
     const el = containerRef.current
     if (!el || !active) return
     const EDGE = 24
+    // Android fullscreen: the outermost pixels of the top edge belong to the
+    // system (a swipe there shows the status bar), so the band that reveals
+    // the toolbar reaches further down
+    const EDGE_TOP = isAndroid ? 48 : EDGE
     const pinch = { active: false, startDist: 0 }
     const swipe = { edge: null as 'left' | 'right' | 'top' | null, x: 0, y: 0, done: false }
 
@@ -2737,7 +2797,7 @@ export default function PdfViewer({
       if (e.touches.length >= 2) {
         // Two fingers = pinch. preventDefault stops native panning/zooming so
         // we keep receiving moves; a stray swipe/drag in progress is dropped.
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         swipe.edge = null
         annotDragRef.current = null
         if (!pinch.active) beginPinchSegment(e.touches)
@@ -2753,7 +2813,7 @@ export default function PdfViewer({
           const [hx, hy] = pagePointFromClientRef.current(t.clientX, t.clientY, pageEl)
           const hit = annotationHitTest(annotsRef.current.get(pageNumber) ?? [], hx, hy)
           if (hit && isMovableAnnotation(hit) && hit.quads[0]) {
-            e.preventDefault()
+            if (e.cancelable) e.preventDefault()
             annotDragRef.current = {
               pageNumber,
               record: hit,
@@ -2774,7 +2834,7 @@ export default function PdfViewer({
       const fromLeft = t.clientX - rect.left
       const fromRight = rect.right - t.clientX
       const fromTop = t.clientY - rect.top
-      if (immersiveRef.current && !toolbarPinned && fromTop <= EDGE) {
+      if (immersiveRef.current && !toolbarPinned && fromTop <= EDGE_TOP) {
         swipe.edge = 'top'
       } else if (fromLeft <= EDGE) {
         swipe.edge = 'left'
@@ -2784,7 +2844,7 @@ export default function PdfViewer({
         swipe.edge = null
         return
       }
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       swipe.x = t.clientX
       swipe.y = t.clientY
       swipe.done = false
@@ -2792,7 +2852,7 @@ export default function PdfViewer({
 
     const onTouchMove = (e: TouchEvent): void => {
       if (pinch.active && e.touches.length >= 2) {
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         const g = gestureRef.current
         const inner = innerRef.current
         if (!g || !inner) return
@@ -2811,9 +2871,9 @@ export default function PdfViewer({
         }
         return
       }
-      if (annotDragRef.current) e.preventDefault() // pointermove drives the ghost
+      if (annotDragRef.current && e.cancelable) e.preventDefault() // pointermove drives the ghost
       if (swipe.edge && !swipe.done && e.touches.length === 1) {
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         const t = e.touches[0]
         const dx = t.clientX - swipe.x
         const dy = t.clientY - swipe.y
@@ -5804,6 +5864,12 @@ export default function PdfViewer({
   // the whole chrome gets out of the way in one gesture.
   const preUnpinPanelsRef = useRef<{ toc: boolean; ai: boolean } | null>(null)
   const togglePin = useCallback(() => {
+    // Android fullscreen holds the toolbar tucked whatever the pin says:
+    // asking for it pinned there means leaving fullscreen
+    if (isAndroid && fullscreenRef.current) {
+      toggleFullscreenRef.current()
+      return
+    }
     setToolbarPinned((pinned) => {
       const next = !pinned
       saveToolbarPinned(next)
@@ -5881,10 +5947,23 @@ export default function PdfViewer({
     setFullscreen((f) => {
       const next = !f
       bridge.setFullscreen(next)
-      if (next) showToast(t('viewer.fullscreenToast'))
+      if (next) showToast(t(isAndroid ? 'viewer.fullscreenToastTouch' : 'viewer.fullscreenToast'))
+      if (next && isAndroid) setToolbarPeek(false)
       return next
     })
   }, [showToast])
+  toggleFullscreenRef.current = toggleFullscreen
+
+  // Fullscreen can end from outside the toolbar (Android's back button, the
+  // browser's own Esc): follow the platform so the next tap does not have to
+  // undo a state that is already gone
+  useEffect(
+    () =>
+      bridge.onFullScreen((fs) => {
+        if (!fs) setFullscreen(false)
+      }),
+    []
+  )
 
   // Presentation mode: a self-contained fullscreen slideshow overlay. Entering
   // takes the window into OS fullscreen (if it wasn't already) so nothing but
@@ -6621,7 +6700,9 @@ export default function PdfViewer({
    *  prints the draft file the same way through a hidden window. */
   const printDocument = useCallback(() => {
     void (async () => {
-      if (!isElectron) {
+      // Android prints through its own print service (bridge.printFile, below):
+      // a WebView has no PDF viewer to hand the blob to, and no window.print
+      if (!isElectron && !isAndroid) {
         const bytes = await browserCurrentBytes(payload.path)
         if (bytes) {
           const url = URL.createObjectURL(
@@ -6749,7 +6830,7 @@ export default function PdfViewer({
         // would offer to save the viewer PAGE, never the PDF) it has to: it does
         // exactly what the Save-a-copy button does — one Save dialog, or a
         // download where pickers are missing. Edge's built-in viewer sets that bar.
-        if (dirty || (!isElectron && !isExtension)) void saveDocument()
+        if (dirty || !writesInPlace) void saveDocument()
         else if (isExtension && isRemoteSource(payload.path)) void saveDocumentAs()
         break
       case 'file.saveAs':
@@ -7183,7 +7264,11 @@ export default function PdfViewer({
     >
       <div
         className={`toolbar-wrap${toolbarVisible ? '' : ' tucked'}`}
-        onMouseLeave={() => !toolbarPinned && setToolbarPeek(false)}
+        // Hover only, like the reveal: after a tap, Chromium sends mouse-type
+        // boundary events from the tap's point as the layout moves under it,
+        // and the toolbar a swipe had just revealed got a «leave» and tucked
+        // again at once (a tablet in split view, after tapping a menu item)
+        onPointerLeave={(e) => !toolbarPinned && isHover(e) && setToolbarPeek(false)}
       >
         <Toolbar
           page={currentPage}
@@ -7240,7 +7325,7 @@ export default function PdfViewer({
           dirty={dirty}
           onSave={() => void saveDocument()}
           onSaveAs={() => void saveDocumentAs()}
-          canSaveInPlace={isElectron || isExtension}
+          canSaveInPlace={writesInPlace}
           annotsHidden={annotsHidden}
           onToggleAnnots={() => setAnnotsHidden((h) => !h)}
           canUndo={undoDepths.undo > 0}
@@ -7304,7 +7389,8 @@ export default function PdfViewer({
           onToggleFullscreen={toggleFullscreen}
           splitOpen={splitOpen}
           onSwapPanes={swapPanes}
-          onToggleSplit={toggleSplit}
+          onToggleSplit={splitButton}
+          splitPickerOpen={splitPicking}
           splitCandidates={
             onRequestOpenInSplit && onRequestOpenOtherInSplit
               ? {
@@ -7314,6 +7400,7 @@ export default function PdfViewer({
                 }
               : undefined
           }
+          mosaic={mosaic}
           onClosePane={closePane}
           activePane={activePane}
           onActivatePane={activatePane}
@@ -7334,7 +7421,13 @@ export default function PdfViewer({
       {/* Tucked-toolbar reveal: mouse hovers this top hot-zone; touch swipes
           down from the top edge (handled in the touch effect) — no permanent
           on-screen affordance. */}
-      {immersive && <div className="reveal-zone" onMouseEnter={() => setToolbarPeek(true)} />}
+      {/* Hover only — not the echo of a tap (isHover, above) */}
+      {immersive && (
+        <div
+          className="reveal-zone"
+          onPointerEnter={(e) => isHover(e) && setToolbarPeek(true)}
+        />
+      )}
 
       {/* Edge rails — pointer near an edge fades the HANDLE in (window-level
           hint, no interactive strip: the pages scrollbar at the right edge
@@ -7454,6 +7547,38 @@ export default function PdfViewer({
             <div className={`pane-drop-hint${paneADrop.half ? ` is-${paneADrop.half}` : ''}`}>
               <span>{t('viewer.dropSplitHint')}</span>
             </div>
+          )}
+          {splitPicking && !splitOpen && splitCandidates && (
+            <SplitPicker
+              docs={splitCandidates}
+              currentPath={payload.path}
+              threeOpen={!!mosaic?.open}
+              canThree={!!mosaic?.canOpen}
+              onOne={() => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+              }}
+              onThree={
+                mosaic
+                  ? () => {
+                      setSplitPicking(false)
+                      if (!mosaic.open) mosaic.onToggle()
+                    }
+                  : undefined
+              }
+              // Two documents: the mosaic (if it showed) ends first
+              onPick={(path) => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+                void onRequestOpenInSplit?.(path)
+              }}
+              onOther={() => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+                onRequestOpenOtherInSplit?.()
+              }}
+              onClose={() => setSplitPicking(false)}
+            />
           )}
         <div
           className={`pages${drawTool ? ' drawing' : ''}${paged ? ' paged' : ''}`}
@@ -7717,7 +7842,8 @@ export default function PdfViewer({
                 chatSnip={chatSnip}
                 onChatSnipConsumed={() => setChatSnip(null)}
                 onRequestSnip={() => armSnip('chat')}
-                onDetach={() => {
+                // A phone has no second window to move the chat into
+                onDetach={isAndroid ? undefined : () => {
                   // The chat moves out; the docked panel closes behind it.
                   // Reopening it (A) is allowed — both write the same stored
                   // history, and the panel refreshes on the storage event.

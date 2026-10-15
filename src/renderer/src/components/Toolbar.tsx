@@ -41,7 +41,7 @@ import {
   NIGHT_TONES,
   TUNE_RANGE
 } from '../theme-tune'
-import { bridge, isElectron, isExtension } from '../bridge'
+import { bridge, isAndroid, isElectron, isExtension } from '../bridge'
 import { setWebTakeover, webTakeoverEnabled } from '../extension-takeover'
 import {
   annotTypeLabel,
@@ -142,6 +142,7 @@ import {
   IconSignature,
   IconSparkle,
   IconSplit,
+  IconMosaic,
   IconFolderOpen,
   IconSwapPanes,
   IconNote,
@@ -199,6 +200,15 @@ const ZOOM_PRESETS = [50, 75, 100, 125, 150, 200, 400] as const
  *  shows on a plain desktop. maxTouchPoints, not (pointer: coarse): a Surface
  *  with its keyboard attached has a fine primary pointer AND a touch screen. */
 const HAS_TOUCH = navigator.maxTouchPoints > 0
+
+/** The view menu's handle on App's three-document mosaic */
+export interface MosaicControl {
+  /** This tab is one of the three tiles right now */
+  open: boolean
+  /** Enough tabs are open to fill the other two tiles */
+  canOpen: boolean
+  onToggle(): void
+}
 
 interface Props {
   page: number
@@ -340,6 +350,8 @@ interface Props {
    *  zoom are its own — so the toolbar's centre gains a column switcher, and its
    *  one cluster drives whichever column that switcher points at. */
   splitOpen: boolean
+  /** The split button's «which document?» panel is up (SplitPicker) */
+  splitPickerOpen?: boolean
   onSwapPanes(): void
   onToggleSplit(): void
   /** Desktop: the OTHER documents open in this window, offered under «Åpne i
@@ -349,6 +361,9 @@ interface Props {
   splitCandidates?:
     | { docs: { name: string; path: string }[]; onOpen(path: string): void; onOpenOther(): void }
     | undefined
+  /** The three-document mosaic (App): one document on half the window, two
+   *  on a quarter each. Undefined where the platform has no tabs. */
+  mosaic?: MosaicControl | undefined
   activePane: 'a' | 'b'
   onActivatePane(pane: 'a' | 'b'): void
   /** Close one named column, keeping the other's content */
@@ -548,9 +563,11 @@ export default function Toolbar({
   onPresent,
   onToggleFullscreen,
   splitOpen,
+  splitPickerOpen = false,
   onSwapPanes,
   onToggleSplit,
   splitCandidates,
+  mosaic,
   activePane,
   onActivatePane,
   onClosePane,
@@ -753,6 +770,12 @@ export default function Toolbar({
   const overflowMenuRef = useRef<HTMLDivElement>(null)
   const [hiddenCount, setHiddenCount] = useState(0)
   const [overflowMenuOpen, setOverflowMenuOpen] = useState(false)
+  /** A folded tool's options, opened inside the "…" menu: brought into view,
+   *  since they open below rows that may already fill the menu's height */
+  const overflowToolRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (overflowMenuOpen && toolMenu) overflowToolRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [overflowMenuOpen, toolMenu])
 
   // Stable closers so the shared hook does not re-bind its listeners each render
   const closeToolMenu = useCallback(() => setToolMenu(null), [])
@@ -1072,6 +1095,13 @@ export default function Toolbar({
   // first three out are the ones that are pointless or duplicated when narrow:
   // split (two columns in a narrow window), pin, and fit (also in the Vis menu,
   // and on W).
+  const splitAction = {
+    key: 'split',
+    icon: <IconSplit size={15} />,
+    label: t('tb.split'),
+    onClick: onToggleSplit,
+    active: splitOpen || splitPickerOpen
+  }
   const overflowActions: {
     key: string
     icon: React.JSX.Element
@@ -1093,7 +1123,10 @@ export default function Toolbar({
           }
         ]
       : []),
-    { key: 'split', icon: <IconSplit size={15} />, label: t('tb.split'), onClick: onToggleSplit, active: splitOpen },
+    // On a desktop the split has its key ('s') and folds early. On Android the
+    // button is the only way in (it asks which document, SplitPicker), so it
+    // is the last to fold — at the end of this list
+    ...(isAndroid ? [] : [splitAction]),
     {
       key: 'pin',
       icon: toolbarPinned ? <IconPin size={15} /> : <IconPinOff size={15} />,
@@ -1129,13 +1162,18 @@ export default function Toolbar({
     { key: 'marker', icon: <IconMarker size={15} />, label: t('tb.marker'), onClick: () => onToolSelect(activeTool === 'marker' ? null : 'marker'), active: activeTool === 'marker', opts: 'marker', disabled: toolsLocked },
     { key: 'pen', icon: <IconPen size={15} />, label: t('tb.pen'), onClick: () => onToolSelect(activeTool === 'pen' ? null : 'pen'), active: activeTool === 'pen', opts: 'pen', disabled: toolsLocked },
     { key: 'present', icon: <IconPresent size={15} />, label: t('tb.present'), onClick: onPresent },
-    { key: 'fullscreen', icon: <IconFullscreen size={15} />, label: t('tb.fullscreen'), onClick: onToggleFullscreen },
+    // On Android the fullscreen button never folds: it is the phone's way into
+    // (and, from the swiped-down toolbar, out of) the page-only view
+    ...(isAndroid
+      ? []
+      : [{ key: 'fullscreen', icon: <IconFullscreen size={15} />, label: t('tb.fullscreen'), onClick: onToggleFullscreen }]),
     { key: 'redo', icon: <IconRedo size={15} />, label: t('tb.redo'), onClick: onRedo, disabled: !canRedo },
     { key: 'undo', icon: <IconUndo size={15} />, label: t('tb.undo'), onClick: onUndo, disabled: !canUndo },
     { key: 'forward', icon: <IconArrowRight size={15} />, label: t('tb.forward'), onClick: onNavForward, disabled: !canNavForward },
     { key: 'back', icon: <IconArrowLeft size={15} />, label: t('tb.back'), onClick: onNavBack, disabled: !canNavBack },
     { key: 'search', icon: <IconSearch size={15} />, label: t('tb.search'), onClick: onToggleSearch },
-    { key: 'ai', icon: <IconSparkle size={15} />, label: t('ai.assistant'), onClick: onToggleAi, active: aiOpen }
+    { key: 'ai', icon: <IconSparkle size={15} />, label: t('ai.assistant'), onClick: onToggleAi, active: aiOpen },
+    ...(isAndroid ? [splitAction] : [])
   ]
   const maxHidden = overflowActions.length
   const hiddenKeys = new Set(overflowActions.slice(0, Math.min(hiddenCount, maxHidden)).map((a) => a.key))
@@ -1878,6 +1916,30 @@ export default function Toolbar({
                   <div className="menu-hint">{t('tb.splitDropHint')}</div>
                 </>
               )}
+              {/* Three documents at once: this one on half the window, two
+                  more on a quarter each (App's mosaic) */}
+              {mosaic && (
+                <>
+                  <div className="theme-menu-sep" />
+                  <div className="theme-menu-label">{t('tb.mosaic')}</div>
+                  <button
+                    className={`menu-action${mosaic.open ? ' is-active' : ''}`}
+                    disabled={!mosaic.open && !mosaic.canOpen}
+                    onClick={() => {
+                      setViewMenuOpen(false)
+                      mosaic.onToggle()
+                    }}
+                  >
+                    <IconMosaic size={15} />
+                    <span className="menu-action-text">
+                      {t(mosaic.open ? 'tb.mosaicClose' : 'tb.mosaicOpen')}
+                    </span>
+                  </button>
+                  <div className="menu-hint">
+                    {t(mosaic.open || mosaic.canOpen ? 'tb.mosaicHint' : 'tb.mosaicNeedThree')}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -2405,7 +2467,7 @@ export default function Toolbar({
             was a second copy of a control that was never in the wrong place. */}
         {inline('split') && (
           <button
-            className={`tb-btn${splitOpen ? ' is-active' : ''}`}
+            className={`tb-btn${splitOpen || splitPickerOpen ? ' is-active' : ''}`}
             onClick={onToggleSplit}
             title={withShortcut(t('tb.splitTip'), 'view.split')}
           >
@@ -2822,7 +2884,9 @@ export default function Toolbar({
                     )}
                   </span>
                 ))}
-                {toolMenu && !inline(toolMenu === 'shape' ? 'shapes' : toolMenu) ? toolPopover : null}
+                {toolMenu && !inline(toolMenu === 'shape' ? 'shapes' : toolMenu) ? (
+                  <div ref={overflowToolRef}>{toolPopover}</div>
+                ) : null}
               </div>
             )}
           </div>

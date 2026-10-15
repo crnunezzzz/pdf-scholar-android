@@ -136,6 +136,9 @@ export interface SessionTab {
   /** Pinned tabs stay at the strip's start, lose their close button, and
    *  come back at every launch even with restoreSession off */
   pinned?: boolean
+  /** The document's display name, where the path cannot give one (Android's
+   *  `content://` URIs) — what a restored tab shows before its file is read */
+  name?: string
 }
 
 /** A window's tabs in strip order (pinned first) and which one was showing */
