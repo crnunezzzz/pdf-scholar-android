@@ -2777,7 +2777,7 @@ export default function PdfViewer({
       if (e.touches.length >= 2) {
         // Two fingers = pinch. preventDefault stops native panning/zooming so
         // we keep receiving moves; a stray swipe/drag in progress is dropped.
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         swipe.edge = null
         annotDragRef.current = null
         if (!pinch.active) beginPinchSegment(e.touches)
@@ -2793,7 +2793,7 @@ export default function PdfViewer({
           const [hx, hy] = pagePointFromClientRef.current(t.clientX, t.clientY, pageEl)
           const hit = annotationHitTest(annotsRef.current.get(pageNumber) ?? [], hx, hy)
           if (hit && isMovableAnnotation(hit) && hit.quads[0]) {
-            e.preventDefault()
+            if (e.cancelable) e.preventDefault()
             annotDragRef.current = {
               pageNumber,
               record: hit,
@@ -2824,7 +2824,7 @@ export default function PdfViewer({
         swipe.edge = null
         return
       }
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       swipe.x = t.clientX
       swipe.y = t.clientY
       swipe.done = false
@@ -2832,7 +2832,7 @@ export default function PdfViewer({
 
     const onTouchMove = (e: TouchEvent): void => {
       if (pinch.active && e.touches.length >= 2) {
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         const g = gestureRef.current
         const inner = innerRef.current
         if (!g || !inner) return
@@ -2851,9 +2851,9 @@ export default function PdfViewer({
         }
         return
       }
-      if (annotDragRef.current) e.preventDefault() // pointermove drives the ghost
+      if (annotDragRef.current && e.cancelable) e.preventDefault() // pointermove drives the ghost
       if (swipe.edge && !swipe.done && e.touches.length === 1) {
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         const t = e.touches[0]
         const dx = t.clientX - swipe.x
         const dy = t.clientY - swipe.y

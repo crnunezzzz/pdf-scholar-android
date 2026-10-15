@@ -68,6 +68,11 @@ rotate(0)
 // mCurrentFocus=ImmersiveModeConfirmation). A person taps «Got it» once; the
 // test marks it seen, as Android's own UI tests do.
 adb('shell', 'settings', 'put', 'secure', 'immersive_mode_confirmations', 'confirmed')
+// A slow emulator now and then leaves ANOTHER app «not responding» (the
+// launcher, in a tablet run), and that dialog takes the key focus: Back never
+// reached the app. A device under test shows no error dialogs, and one already
+// up is closed below before a key is sent (closeForeignDialog).
+adb('shell', 'settings', 'put', 'global', 'hide_error_dialogs', '1')
 adb('install', '-r', '-g', APK)
 // The documents in the app's own storage: readable through a file:// intent
 // without any storage permission, and writable, so «Save» goes in place
@@ -75,6 +80,16 @@ for (const name of Object.keys(DOCS)) {
   adb('push', FIXTURES + name, `/data/local/tmp/${name}`)
   adb('shell', 'run-as', PKG, 'mkdir', '-p', 'files')
   adb('shell', 'run-as', PKG, 'cp', `/data/local/tmp/${name}`, `files/${name}`)
+}
+/** Another app's «not responding» window holding the focus: stop that app,
+ *  as the dialog's «Close app» would, so the next key reaches ours */
+function closeForeignDialog() {
+  const focus = adb('shell', 'dumpsys', 'window').split('\n').find((l) => /mCurrentFocus/.test(l)) ?? ''
+  const pkg = /Application Not Responding: ([\w.]+)/.exec(focus)?.[1]
+  if (!pkg || pkg === PKG) return
+  console.log(`closing «${pkg} isn't responding», which held the focus`)
+  adb('shell', 'am', 'force-stop', pkg)
+  adb('shell', 'am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
 }
 const fileUri = (name) => `file:///data/data/${PKG}/files/${name}`
 const openWith = (name) =>
@@ -197,6 +212,7 @@ const fileHas = (name, needle) => {
 // ---------- 1. open with, two tabs ----------
 
 adb('shell', 'am', 'force-stop', PKG)
+closeForeignDialog()
 openWith('economia.pdf')
 await connect()
 const ua = await ev('navigator.userAgent')
@@ -266,6 +282,7 @@ console.log(`before Back: focus ${focused}, keyboard ${imeShown ? 'shown' : 'hid
 // full screen» notice) would take the Back key before the app ever sees it
 const focusLines = () => adb('shell', 'dumpsys', 'window').split('\n').filter((l) => /mCurrentFocus|mFocusedApp|mFocusedWindow/.test(l)).map((l) => l.trim()).join(' ; ')
 console.log('window focus:', focusLines())
+closeForeignDialog()
 adb('shell', 'input', 'keyevent', 'KEYCODE_BACK')
 await waitFor(`window.innerHeight === ${heightBefore}`, 6000)
 console.log('native:', adb('logcat', '-d', '-s', 'PdfFiles:I').split('\n').filter((l) => /PdfFiles/.test(l)).map((l) => l.replace(/^.*PdfFiles\s*:\s*/, '')).join(' | ') || '(nothing)')
