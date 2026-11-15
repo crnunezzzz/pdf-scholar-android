@@ -10,16 +10,51 @@ shared renderer; only the platform layer is new. Tier and divergences:
 
 ## Install the APK
 
-1. Open the repository's **Actions** tab → workflow **Android** → the latest
-   green run → artifact **pdf-scholar-android-apk**, and download it (a zip
-   holding `PDF-Scholar-<version>-debug.apk`).
-2. Copy the `.apk` to the phone (or download it there), open it and allow
-   «install unknown apps» for the app you opened it with when Android asks.
+1. Open the repository's **Releases** (the latest one is marked «Latest») and
+   download **PDF-Scholar-android.apk** — on the tablet itself is easiest.
+   Every push also leaves an APK on its **Android** workflow run (artifact
+   **pdf-scholar-android-apk**), for trying a branch before it is released.
+2. Open the `.apk` and allow «install unknown apps» for the app you opened it
+   with when Android asks.
 3. A newer APK installs over the old one and keeps the library, positions and
    settings: every build is signed with the same debug key, checked in as
    `android/app/debug.keystore` (a CI runner would otherwise make a new one per
    run, and Android refuses an update signed with another key). A debug key is
    not a release key: for the Play Store, see «Release build» below.
+
+## Updates
+
+The app follows the original repository (emilmsh/pdf-scholar) by itself:
+
+- **Every day** (and on every push to master, and by hand from the Actions
+  tab) `.github/workflows/android-release.yml` merges the original
+  repository's master into this one's, builds the APK and publishes it as the
+  latest release, tagged `android-v<version>-b<build>`. Nothing is published
+  when nothing changed since the last release.
+- **The app checks** that release feed a few seconds after it starts, and
+  again when it comes back to the front after six hours. A newer build raises
+  the update notice; «Open download» hands the APK to the browser, and opening
+  the download installs it over the running app. The gear menu and the start
+  screen have «Check for updates» for the same check on demand. Nothing is
+  downloaded or installed without a tap.
+- **The build number** is minutes since 2020-01-01 UTC, stamped by CI into the
+  APK's versionCode and the renderer (`VITE_ANDROID_BUILD`); the package
+  version cannot order builds, since the original repository does not bump it
+  for every change. `src/shared/android-update.ts` holds the rules,
+  `npm run test:android-update` pins them. A local build carries no number and
+  never checks.
+- **A merge that conflicts** (the original changed lines the Android layer
+  also changed) publishes nothing and opens one issue, «Android: the original
+  repository no longer merges cleanly», listing the files; the last good
+  release stays on offer. Merge `upstream/master` into master by hand, and the
+  next run publishes again.
+- **Keeping master itself current** needs a secret `SYNC_TOKEN`: a personal
+  access token with the `repo` and `workflow` scopes (the original repository
+  changes its own workflow files, which GitHub refuses from the built-in
+  token). Without it each release still carries the merge, but the merge lives
+  only in that build, and master stays where it was.
+- Scheduled workflows stop after 60 days without activity in the repository;
+  GitHub then shows a button on the workflow's page to turn it back on.
 
 ## How it is put together
 
@@ -31,6 +66,8 @@ shared renderer; only the platform layer is new. Tier and divergences:
 | Native half: files, printing, «Open with» | `android/app/src/main/java/io/github/crnunezzzz/pdfscholar/PdfFilesPlugin.java` |
 | Intents (open/share a PDF to the app) | `android/app/src/main/AndroidManifest.xml` |
 | CI build of the APK | `.github/workflows/android.yml` |
+| Daily merge of the original + release | `.github/workflows/android-release.yml` |
+| Update check (in the app) | `src/shared/android-update.ts`, `createAndroidUpdates` in `android-api.ts` |
 
 - **Documents** are opened with the system file picker (Storage Access
   Framework) and keyed on their `content://` URI. The app takes a persistable

@@ -1832,7 +1832,7 @@ export default function App(): React.JSX.Element {
           </div>
         )}
       </div>
-      {isElectron && update && (
+      {(isElectron || isAndroid) && update && (
         <div className="update-toast" role="status">
           <div className="update-toast-text">
             {update.phase === 'available' && (
@@ -1859,7 +1859,9 @@ export default function App(): React.JSX.Element {
                 <span>
                   {update.channel === 'brew'
                     ? t('update.manualBrewBody', { version: update.version })
-                    : t('update.manualDownloadBody', { version: update.version })}
+                    : isAndroid
+                      ? t('update.androidBody', { version: update.version })
+                      : t('update.manualDownloadBody', { version: update.version })}
                 </span>
                 {update.channel === 'brew' && <UpdateCommand command={BREW_UPGRADE_COMMAND} />}
               </>
@@ -1868,7 +1870,9 @@ export default function App(): React.JSX.Element {
           {update.phase === 'manual' && update.channel === 'download' && (
             <button
               className="btn-primary"
-              onClick={() => bridge.openExternal(RELEASES_PAGE_URL)}
+              // Android: the APK itself, which the browser downloads and
+              // Android's installer puts over this one (android-api.ts)
+              onClick={() => (isAndroid ? bridge.updateDownload() : bridge.openExternal(RELEASES_PAGE_URL))}
             >
               {t('update.manualOpen')}
             </button>

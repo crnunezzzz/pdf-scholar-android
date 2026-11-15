@@ -24,6 +24,7 @@
     "android:open": "cap open android",
     "test:android-device": "node scripts/test-android-device.mjs",
     "test:pdf-fonts": "node scripts/test-pdf-fonts.mjs",
+    "test:android-update": "node scripts/test-android-update.mjs",
     "icons:app": "electron scripts/render-icon.cjs && electron scripts/render-file-icon.cjs",
     "icons:ext": "electron scripts/render-extension-icons.cjs",
     "icons:appx": "electron scripts/render-appx-tiles.cjs",

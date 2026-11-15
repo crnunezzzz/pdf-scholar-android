@@ -1234,6 +1234,7 @@ export const zh: Dict = {
   'update.manualBrewBody': 'PDF Scholar {version} 已发布。使用以下命令更新：',
   'update.manualDownloadBody': 'PDF Scholar {version} 已发布。请从 GitHub 下载新版本。',
   'update.manualOpen': '打开下载',
+  'update.androidBody': 'PDF Scholar {version} 已就绪。下载 APK 并打开：它会覆盖安装此版本，并保留你的文库和批注。',
   'update.copy': '复制',
   'update.copied': '已复制',
   'update.checkManualBrew': '版本 {version} 已发布——请运行 {command}。',

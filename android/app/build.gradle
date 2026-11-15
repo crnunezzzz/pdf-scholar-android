@@ -4,6 +4,11 @@ apply plugin: 'com.android.application'
 // the desktop build it was made from
 def pkg = new groovy.json.JsonSlurper().parse(file('../../package.json'))
 def (vMajor, vMinor, vPatch) = pkg.version.tokenize('.').collect { it.replaceAll('[^0-9].*', '') as int }
+// CI stamps a build number (minutes since 2020, src/shared/android-update.ts)
+// so every published APK installs over the one before it, even when the
+// package version did not move; a local build keeps the version's own number
+def stamped = System.getenv('VITE_ANDROID_BUILD')
+def buildCode = (stamped ==~ /\d{1,10}/) ? (stamped as int) : vMajor * 10000 + vMinor * 100 + vPatch
 
 android {
     namespace = "io.github.crnunezzzz.pdfscholar"
@@ -12,7 +17,7 @@ android {
         applicationId "io.github.crnunezzzz.pdfscholar"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode vMajor * 10000 + vMinor * 100 + vPatch
+        versionCode buildCode
         versionName pkg.version
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

@@ -10,7 +10,7 @@ import type {
 import { BREW_UPGRADE_COMMAND } from '../../../shared/update-channel'
 import { readingProgress } from '../../../shared/recent-thumbs'
 import { recentsGridSizeOrDefault, splitRecents, stepRecentsGridSize } from '../../../shared/recents'
-import { bridge, isElectron } from '../bridge'
+import { bridge, isAndroid, isElectron } from '../bridge'
 import { locale, t, useLang } from '../i18n'
 import {
   AppMark,
@@ -352,7 +352,7 @@ export default function Welcome({
     }
   }, [])
 
-  const showUpdateCheck = isElectron && updSupport !== undefined && updSupport !== 'store'
+  const showUpdateCheck = (isElectron || isAndroid) && updSupport !== undefined && updSupport !== 'store'
 
   const checkForUpdates = (): void => {
     if (updateChecking) return

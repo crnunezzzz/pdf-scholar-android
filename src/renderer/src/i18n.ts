@@ -1372,6 +1372,8 @@ const nb = {
   'update.manualBrewBody': 'PDF Scholar {version} er ute. Oppdater med:',
   'update.manualDownloadBody': 'PDF Scholar {version} er ute. Last ned den nye versjonen fra GitHub.',
   'update.manualOpen': 'Åpne nedlasting',
+  'update.androidBody':
+    'PDF Scholar {version} er klar. Last ned APK-en og åpne den: den installeres over denne og beholder biblioteket og merknadene.',
   'update.copy': 'Kopier',
   'update.copied': 'Kopiert',
   'update.checkManualBrew': 'Ny versjon {version} er ute – kjør {command}.',
@@ -2647,6 +2649,8 @@ const en: Dict = {
   'update.manualBrewBody': 'PDF Scholar {version} is out. Update with:',
   'update.manualDownloadBody': 'PDF Scholar {version} is out. Download the new version from GitHub.',
   'update.manualOpen': 'Open download',
+  'update.androidBody':
+    'PDF Scholar {version} is ready. Download the APK and open it: it installs over this one and keeps your library and notes.',
   'update.copy': 'Copy',
   'update.copied': 'Copied',
   'update.checkManualBrew': 'Version {version} is out — run {command}.',

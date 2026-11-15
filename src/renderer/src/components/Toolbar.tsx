@@ -3239,7 +3239,7 @@ export default function Toolbar({
                 <IconKeyboard size={15} />
                 {t('keys.open')}
               </button>
-              {isElectron && updSupport !== undefined && updSupport !== 'store' && (
+              {(isElectron || isAndroid) && updSupport !== undefined && updSupport !== 'store' && (
                 <button className="menu-action" onClick={checkForUpdates} disabled={updChecking}>
                   <IconReload size={15} />
                   {updChecking ? t('update.checking') : t('update.check')}

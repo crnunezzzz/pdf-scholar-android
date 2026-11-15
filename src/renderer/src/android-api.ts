@@ -25,12 +25,14 @@ import { Capacitor, registerPlugin, SystemBars, SystemBarsStyle } from '@capacit
 import type {
   FileError,
   FilePayload,
+  ManualUpdateChannel,
   PdfxApi,
   ReadingPosition,
   RecentFile,
   RecentThumbView,
   SessionWindow,
-  Settings
+  Settings,
+  UpdateCheckOutcome
 } from '../../shared/types'
 import {
   normalizeRecents,
@@ -52,6 +54,15 @@ import { forgetRecentThumbs, loadRecentThumbs, saveRecentThumb } from './extensi
 import { createExtensionAi } from './extension-ai'
 import { store } from './extension-store'
 import { browserCurrentBytes } from './annotation-engine-browser'
+import {
+  androidApkUrl,
+  androidReleasesApi,
+  buildLabel,
+  cleanRepo,
+  newerRelease,
+  ownBuild
+} from '../../shared/android-update'
+import { version as appVersion } from '../../../package.json'
 
 /** True inside the Android app (Capacitor's native bridge is present) */
 export function isAndroidContext(): boolean {
@@ -205,6 +216,87 @@ function loadPositions(): Record<string, ReadingPosition> {
   }
 }
 
+// ---------- updates ----------
+
+/** How long a check stays fresh: the app coming back to the front after this
+ *  asks again (a tablet app is rarely closed, so «at start» alone could mean
+ *  never) */
+const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000
+
+/** The APK's update check (src/shared/android-update.ts): GitHub's release
+ *  feed of the repository CI published this build from. Nothing is downloaded
+ *  or installed by itself — a newer build raises the update notice, and its
+ *  button hands the APK's URL to the browser; Android's installer takes it
+ *  from there. A local build (no stamped number) never checks. */
+function createAndroidUpdates(): Pick<
+  PdfxApi,
+  | 'onUpdateAvailable'
+  | 'onUpdateProgress'
+  | 'onUpdateReady'
+  | 'onUpdateManual'
+  | 'updateSupport'
+  | 'updateCheck'
+  | 'updateDownload'
+  | 'updateRestart'
+> {
+  const own = ownBuild(import.meta.env.VITE_ANDROID_BUILD)
+  const repo = cleanRepo(import.meta.env.VITE_ANDROID_UPDATE_REPO)
+  const current = own > 0 ? buildLabel(appVersion, own) : appVersion
+  const listeners = new Set<(version: string, channel: ManualUpdateChannel) => void>()
+  /** The build on offer, kept for a listener that subscribes after the check */
+  let offered: string | null = null
+  let checkedAt = 0
+
+  const check = async (): Promise<UpdateCheckOutcome> => {
+    if (own <= 0) return { status: 'unsupported', reason: 'dev', current }
+    checkedAt = Date.now()
+    try {
+      const res = await fetch(androidReleasesApi(repo), {
+        headers: { Accept: 'application/vnd.github+json' },
+        cache: 'no-store'
+      })
+      // No release published yet: nothing newer than this build
+      if (res.status === 404) return { status: 'none', current }
+      if (!res.ok) return { status: 'error', current }
+      const next = newerRelease(await res.json(), own)
+      if (!next) return { status: 'none', current }
+      offered = next.label
+      for (const cb of listeners) cb(next.label, 'download')
+      return { status: 'manual', version: next.label, channel: 'download', current }
+    } catch {
+      return { status: 'error', current }
+    }
+  }
+
+  if (own > 0) {
+    // Quietly, once the documents the app was opened with have had their turn
+    setTimeout(() => void check(), 8000)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && Date.now() - checkedAt > UPDATE_RECHECK_MS) void check()
+    })
+  }
+
+  return {
+    onUpdateAvailable: () => () => {},
+    onUpdateProgress: () => () => {},
+    onUpdateReady: () => () => {},
+    onUpdateManual: (cb) => {
+      listeners.add(cb)
+      if (offered) queueMicrotask(() => offered && cb(offered, 'download'))
+      return () => {
+        listeners.delete(cb)
+      }
+    },
+    updateSupport: async () => (own > 0 ? null : 'dev'),
+    updateCheck: check,
+    // The browser downloads the APK; opening it there installs it over this one
+    updateDownload: () => {
+      void PdfFiles.openUrl({ url: androidApkUrl(repo) }).catch(() => {})
+    },
+    updateRestart: () => {}
+  }
+}
+
 // ---------- the API ----------
 
 export function createAndroidApi(base: PdfxApi): PdfxApi {
@@ -266,6 +358,8 @@ export function createAndroidApi(base: PdfxApi): PdfxApi {
     // Provider calls go straight from the WebView (CORS-open APIs only; see
     // docs/ANDROID.md).
     ...createExtensionAi(),
+
+    ...createAndroidUpdates(),
 
     // ---------- Documents ----------
 

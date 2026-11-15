@@ -1,0 +1,159 @@
+# Keeps the Android app current with the original repository (emilmsh/pdf-scholar)
+# and publishes every new build as this repository's latest release — the feed
+# the app checks at start (src/shared/android-update.ts, docs/ANDROID.md
+# «Updates»).
+#
+# Every day, on every push to master, and by hand: merge the original
+# repository's master into this one's, build the APK, and publish it as a
+# release tagged android-v<version>-b<build> with the APK under the fixed name
+# PDF-Scholar-android.apk. Nothing is published when the merged tree is the
+# one the latest release was built from.
+#
+# A merge that does not go through cleanly publishes nothing and opens (or
+# comments on) one issue — the Android layer and the original touched the same
+# lines, and a person has to choose. The last good release stays on offer.
+#
+# The merge is pushed back to master only when a SYNC_TOKEN secret holds a
+# token with the «workflow» scope: the original repository changes its own
+# workflow files, and GitHub refuses those from the built-in token. Without
+# it the merge lives in the build alone, which is enough for the APK.
+name: Android release
+
+on:
+  schedule:
+    - cron: '23 10 * * *'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/emilmsh/pdf-scholar
+  APK_NAME: PDF-Scholar-android.apk
+  HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+  # gh would otherwise pick the remote named «upstream» — the original repository
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge the original repository
+        id: merge
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream master
+          echo "upstream=$(git rev-parse --short upstream/master)" >> "$GITHUB_OUTPUT"
+          if git merge --no-edit -m "Merge the original repository (upstream/master)" upstream/master; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report the conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream }}
+        run: |
+          title='Android: the original repository no longer merges cleanly'
+          body=$(printf 'The daily merge of %s (master at %s) into master stopped on conflicts in:\n\n%s\n\nNo APK was published; the last release stays on offer. Merge upstream/master into master by hand (or ask Claude to), and the next run publishes again.\n\nRun: %s/%s/actions/runs/%s' \
+            "$UPSTREAM" "$UPSTREAM_SHA" "$(sed 's/^/- `/; s/$/`/' conflicts.txt)" \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          open=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$open" ]; then gh issue comment "$open" --body "$body"
+          else gh issue create --title "$title" --body "$body"; fi
+          exit 1
+
+      - name: Anything new since the latest release?
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          last=$(gh release view --json body --jq .body 2>/dev/null || true)
+          if printf '%s' "$last" | grep -q "tree: $tree"; then
+            echo "Already published: tree $tree"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.fresh.outputs.skip == 'false'
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        if: steps.fresh.outputs.skip == 'false'
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Build number
+        if: steps.fresh.outputs.skip == 'false'
+        run: |
+          # Minutes since 2020-01-01 UTC: the APK's versionCode and the number
+          # the app compares (src/shared/android-update.ts buildAt)
+          echo "VITE_ANDROID_BUILD=$(( ($(date -u +%s) - 1577836800) / 60 ))" >> "$GITHUB_ENV"
+          echo "VITE_ANDROID_UPDATE_REPO=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
+
+      - if: steps.fresh.outputs.skip == 'false'
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - if: steps.fresh.outputs.skip == 'false'
+        run: npm run typecheck
+      - if: steps.fresh.outputs.skip == 'false'
+        run: npm run test:pdf-fonts && npm run test:android-update
+      - if: steps.fresh.outputs.skip == 'false'
+        run: npm run android:sync
+      - name: Build the APK
+        if: steps.fresh.outputs.skip == 'false'
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Push the merge to master
+        if: steps.fresh.outputs.skip == 'false' && env.HAS_SYNC_TOKEN == 'true'
+        run: git push origin HEAD:master
+
+      - name: Publish the release
+        if: steps.fresh.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ steps.fresh.outputs.tree }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="android-v${version}-b${VITE_ANDROID_BUILD}"
+          day=$(date -u +%F)
+          # The tag must name a commit GitHub has: the merge itself once it was
+          # pushed, else master's own head (the merge then lived in this run only)
+          if [ "$HAS_SYNC_TOKEN" = 'true' ]; then target=$(git rev-parse HEAD); else target=$(git rev-parse origin/master); fi
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
+          notes=$(printf 'PDF Scholar %s for Android, built %s from the original repository at %s.\n\nInstall: download **%s** on the tablet or phone and open it — it installs over the previous version and keeps the library, positions and notes. The app itself offers this download when a new release appears.\n\n<sub>tree: %s</sub>' \
+            "$version" "$day" "$UPSTREAM_SHA" "$APK_NAME" "$TREE")
+          gh release create "$tag" "$APK_NAME" \
+            --target "$target" \
+            --title "PDF Scholar ${version} for Android (${day})" \
+            --notes "$notes" \
+            --latest

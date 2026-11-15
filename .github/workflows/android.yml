@@ -34,6 +34,15 @@ jobs:
       - run: npm run typecheck
       # The bundled twins for fonts a PDF names but does not embed
       - run: npm run test:pdf-fonts
+      # Which published release counts as newer than the running APK
+      - run: npm run test:android-update
+      # The build number every APK carries (versionCode and the update check,
+      # src/shared/android-update.ts): an artifact from here installs over a
+      # release built earlier, and the reverse, like any two builds
+      - name: Build number
+        run: |
+          echo "VITE_ANDROID_BUILD=$(( ($(date -u +%s) - 1577836800) / 60 ))" >> "$GITHUB_ENV"
+          echo "VITE_ANDROID_UPDATE_REPO=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
       # dist-android/ → android/app/src/main/assets/public, plus the generated
       # capacitor-cordova-android-plugins project the app module depends on
       - run: npm run android:sync

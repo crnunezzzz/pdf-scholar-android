@@ -879,15 +879,18 @@ export default function TabBar({
               tab's path as it is on disk, for pasting into a chat, a mail or
               a reference manager. The same string the browser build's
               document button uses; the menu closes, so no «Kopiert» flash. */}
-          <button
-            className="menu-item"
-            onClick={() => {
-              void navigator.clipboard?.writeText(menu.tab.path).catch(() => {})
-              setMenu(null)
-            }}
-          >
-            {t('doc.copyPath')}
-          </button>
+          {/* Not on Android: a content:// URI is no path anyone can paste */}
+          {!isAndroid && (
+            <button
+              className="menu-item"
+              onClick={() => {
+                void navigator.clipboard?.writeText(menu.tab.path).catch(() => {})
+                setMenu(null)
+              }}
+            >
+              {t('doc.copyPath')}
+            </button>
+          )}
           {menuZotero && (
             <button
               className="menu-item"
