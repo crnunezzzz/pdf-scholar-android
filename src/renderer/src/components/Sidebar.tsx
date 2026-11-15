@@ -115,6 +115,14 @@ interface Props {
   onOutdentBookmark(page: number): void
   onToggleBookmarkCollapsed(page: number): void
   onExport(format: ExportFormat): void
+  /** «Kopier for KI»: the marks and this document's conversations as text */
+  onCopyForAi(): void
+  /** Whether AI tools outside the app are kept from this document (shared/
+   *  mcp.ts): by itself, by its folder, or not. undefined = no line — not
+   *  the desktop, or no tool may read. */
+  aiToolsKeptOut?: 'doc' | 'folder' | null | undefined
+  /** Open «KI-verktøy på maskinen» on this document */
+  onChangeAiTools?: (() => void) | undefined
   /** Open the AI panel with the "summarize my annotations" question */
   onAskAi(): void
   /** Browser/extension only: the open document's display name + source path,
@@ -181,6 +189,9 @@ function Sidebar({
   onOutdentBookmark,
   onToggleBookmarkCollapsed,
   onExport,
+  onCopyForAi,
+  aiToolsKeptOut,
+  onChangeAiTools,
   onAskAi,
   docName,
   docPath,
@@ -461,6 +472,9 @@ function Sidebar({
           onDelete={onDeleteAnnot}
           onDeleteAll={onDeleteAllAnnots}
           onExport={onExport}
+          onCopyForAi={onCopyForAi}
+          aiToolsKeptOut={aiToolsKeptOut}
+          onChangeAiTools={onChangeAiTools}
           onAskAi={onAskAi}
           selectedAnnotId={selectedAnnotId}
           onCommentChange={onCommentChange}
@@ -648,6 +662,9 @@ function AnnotationList({
   onDelete,
   onDeleteAll,
   onExport,
+  onCopyForAi,
+  aiToolsKeptOut,
+  onChangeAiTools,
   onAskAi,
   selectedAnnotId,
   onCommentChange,
@@ -663,6 +680,10 @@ function AnnotationList({
   onDelete(pageNumber: number, record: PageAnnotation): void
   onDeleteAll(): void
   onExport(format: ExportFormat): void
+  onCopyForAi(): void
+  aiToolsKeptOut?: 'doc' | 'folder' | null | undefined
+  /** Open «KI-verktøy på maskinen» on this document */
+  onChangeAiTools?: (() => void) | undefined
   onAskAi(): void
   selectedAnnotId: string | null
   onCommentChange(pageNumber: number, localId: string, text: string): void
@@ -762,9 +783,11 @@ function AnnotationList({
   }, [flat, query, colorFilter, typeFilter, withComment, excerpts])
 
   // The margin VIEW controls live HERE — the tab is the one home for
-  // everything comment-related (toolbar keeps only the quick on/off toggle).
-  // Rendered even with zero annotations: turning the margin on first is a
-  // valid start. Exports — both kinds — live together in the export section.
+  // everything comment-related. Since 2026-10-27 the toolbar's view menu holds
+  // the same switch and side choice (and «m» toggles it): this tab was three
+  // steps away from the margin it governs. Rendered even with zero
+  // annotations: turning the margin on first is a valid start. Exports — both
+  // kinds — live together in the export section.
   const marginControls = (
     <div className="annot-margin">
       <label className="theme-menu-toggle">
@@ -823,7 +846,24 @@ function AnnotationList({
           <button disabled={empty} onClick={onExportMargin}>
             {t('side.exportMarginBtn')}
           </button>
+          {/* Enabled with no marks too: the document's conversations come
+              along, and a document may have only those */}
+          <button onClick={onCopyForAi} title={t('side.copyForAiTip')}>
+            {t('side.copyForAi')}
+          </button>
         </div>
+        {/* Only while some AI tool may read: whether this document is
+            shared, beside the copy that is its other door. The choice
+            itself lives in one place with every other document and the
+            tools (AiToolsDialog.tsx) — «Endre» opens it on this one. */}
+        {aiToolsKeptOut !== undefined && onChangeAiTools && (
+          <div className="annot-ai-tools">
+            <span>{aiToolsKeptOut === null ? t('side.aiShared') : t('side.aiKeptOut')}</span>
+            <button className="menu-link" onClick={onChangeAiTools} title={t('side.aiChangeTip')}>
+              {t('side.aiChange')}
+            </button>
+          </div>
+        )}
         <button className="annot-ask-ai" disabled={empty} onClick={onAskAi} title={t('side.askAiTip')}>
           <span className="annot-ask-ai-glyph">✦</span>
           {t('ai.annotsBtn')}

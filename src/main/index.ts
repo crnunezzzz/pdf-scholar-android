@@ -13,7 +13,7 @@ import {
 } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
-import { open, readFile, stat, writeFile } from 'node:fs/promises'
+import { access, open, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type {
@@ -24,6 +24,7 @@ import type {
   DeleteAnnotationRequest,
   FileError,
   FilePayload,
+  GoneDocument,
   ModifyAnnotationRequest,
   DocBookmark,
   ReadingPosition,
@@ -33,6 +34,7 @@ import type {
   SessionTab,
   SessionWindow,
   SetFormFieldRequest,
+  TabGroup,
   Settings,
   TabDropResult
 } from '../shared/types'
@@ -87,6 +89,7 @@ import {
   setPosition
 } from './storage'
 import { initUpdater } from './updater'
+import { dialogLanguage } from './dialog-language'
 import { toLongPath } from './long-path'
 import { applyPortableUserData } from './portable'
 import { reapplyFileIconAtStartup, registerFileIconIpc } from './file-icon'
@@ -96,6 +99,17 @@ import { citationAbstract } from './abstract'
 import { citationStyleOrDefault } from '../shared/citation-style'
 import { RECENT_THUMB_READ_MAX_BYTES } from '../shared/recent-thumbs'
 import { createRecentThumbStore } from './recent-thumbs'
+import { createChatHistoryStore } from './chat-history'
+import type { StoredConversation } from '../shared/chat-history'
+import { docNameFromPath, sanitizeConversations, searchConversations, toMeta, withoutImages } from '../shared/chat-history'
+import { excludedBy, sharesWithAny, type McpDocument } from '../shared/mcp'
+import { rebindIdentity, validFingerprint } from '../shared/doc-identity'
+import { createNotesStore } from './notes-store'
+import { sanitizeDocNotes } from '../shared/research-notes'
+import { refreshMcpScriptAtStartup, registerMcpIpc } from './mcp-connect'
+import { isNativeHostChild } from '../shared/native-host'
+import { runNativeHost } from './native-host'
+import { registerNativeHostAtStartup } from './native-host-register'
 
 // The portable zip keeps its state beside the exe. Before ANY path is read —
 // the migration below, the single-instance lock, the state file, drafts.
@@ -145,7 +159,7 @@ const pendingSessions = new Map<number, SessionWindow>()
 /** webContents.id → that window's strip as its renderer last reported it */
 const sessionWindows = new Map<
   number,
-  { win: BrowserWindow; tabs: SessionTab[]; active: number; bounds?: SessionBounds }
+  { win: BrowserWindow; tabs: SessionTab[]; active: number; groups?: TabGroup[]; bounds?: SessionBounds }
 >()
 /** Set when the app quits with windows still open: the session was written
  *  whole at that moment, and the windows closing after it must not shrink it.
@@ -165,7 +179,12 @@ function writeSession(): void {
   for (const w of sessionWindows.values()) {
     if (w.tabs.length === 0) continue
     const bounds = boundsOf(w.win) ?? w.bounds
-    windows.push(bounds ? { tabs: w.tabs, active: w.active, bounds } : { tabs: w.tabs, active: w.active })
+    windows.push({
+      tabs: w.tabs,
+      active: w.active,
+      ...(w.groups?.length ? { groups: w.groups } : {}),
+      ...(bounds ? { bounds } : {})
+    })
   }
   getState().session = { windows }
   saveState()
@@ -212,17 +231,6 @@ async function sessionRestorePlan(): Promise<StoredSessionWindow[]> {
   if (paths.length === 0) return []
   const exists = await existingFiles(paths)
   return restorePlan(stored, state.settings.restoreSession !== false, (p) => exists.has(p))
-}
-
-/** The language native dialogs speak. The renderer's i18n cannot be reached
- *  from main, so the handful of native strings below resolve the same language
- *  setting themselves — this is the one place that decision is made (mirrors
- *  resolveLanguage in the renderer's i18n.ts). */
-function dialogLanguage(): 'nb' | 'en' | 'zh' {
-  const pref = getState().settings.language
-  if (pref !== 'auto') return pref
-  const sys = app.getLocale().toLowerCase()
-  return sys.startsWith('n') ? 'nb' : sys.startsWith('zh') ? 'zh' : 'en'
 }
 
 /** Native-dialog strings following the app language setting */
@@ -341,8 +349,14 @@ function windowFor(e?: { sender: Electron.WebContents }): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
 }
 
-const gotLock = app.requestSingleInstanceLock()
-if (!gotLock) {
+// Started as the extension's native host (native-host.ts, through the relay
+// the browser runs): before the single-instance lock, so a running app is
+// never asked, and nothing below — windows, updater, session — runs
+const hostLaunch = isNativeHostChild(process.argv)
+const gotLock = !hostLaunch && app.requestSingleInstanceLock()
+if (hostLaunch) {
+  runNativeHost()
+} else if (!gotLock) {
   app.quit()
 } else {
   // A second launch (e.g. "Open with" from Explorer) opens the document as a
@@ -425,6 +439,12 @@ if (!gotLock) {
     // The installer rewrites the .pdf DefaultIcon on every upgrade — put a
     // non-default choice back (compares first, so a quiet start stays quiet)
     reapplyFileIconAtStartup()
+    // A connected AI tool runs the MCP script from userData — keep it the
+    // version of the app that is running
+    refreshMcpScriptAtStartup()
+    // Where Chrome/Edge find the host the extension borrows the ChatGPT
+    // sign-in through — compared first, so a quiet start writes nothing
+    registerNativeHostAtStartup()
     // The last session's windows (issue #29). The extra windows open first so
     // the one holding a file from the command line ends up in front.
     const plan = await sessionRestorePlan().catch((err) => {
@@ -576,7 +596,13 @@ function createWindow(openPath?: string | null, restore?: StoredSessionWindow): 
   // when read inside the 'closed' handler
   const wcId = win.webContents.id
   if (openPath) pendingPaths.set(wcId, openPath)
-  if (restore) pendingSessions.set(wcId, { tabs: restore.tabs, active: restore.active })
+  if (restore) {
+    pendingSessions.set(wcId, {
+      tabs: restore.tabs,
+      active: restore.active,
+      ...(restore.groups ? { groups: restore.groups } : {})
+    })
+  }
 
   // Guard: the window can be closed before ready-to-show ever fires
   win.once('ready-to-show', () => {
@@ -1218,8 +1244,22 @@ function registerIpc(): void {
   ipcMain.handle('settings:get', () => getState().settings)
 
   registerFileIconIpc(windowFor)
+  registerMcpIpc(windowFor)
 
   ipcMain.handle('app:version', () => app.getVersion())
+
+  // The OS's own language list, not app.getLocale(): Chromium falls back to
+  // en-US for a language it ships no translation for, and the AI's default
+  // answer language (shared/answer-language.ts) is meant to see past that
+  ipcMain.handle('app:system-languages', (): string[] => {
+    try {
+      const preferred = app.getPreferredSystemLanguages()
+      if (preferred.length) return preferred
+    } catch {
+      // fall through to the app locale
+    }
+    return [app.getLocale()]
+  })
 
   ipcMain.handle('position:get', (_e, path: string) => getState().positions[path] ?? null)
 
@@ -1249,6 +1289,7 @@ function registerIpc(): void {
       win,
       tabs: clean?.tabs ?? [],
       active: clean?.active ?? 0,
+      ...(clean?.groups ? { groups: clean.groups } : {}),
       ...(prev?.bounds ? { bounds: prev.bounds } : {})
     })
     if (!sessionQuitting) scheduleSessionWrite()
@@ -1259,6 +1300,232 @@ function registerIpc(): void {
   ipcMain.on('bookmarks:set', (_e, path: string, bookmarks: DocBookmark[]) =>
     setBookmarks(path, bookmarks)
   )
+
+  // The AI conversations (issue #46): one file per document under
+  // userData/chats (src/main/chat-history.ts). A write is awaited by the
+  // renderer, and every OTHER window hears of it — a docked panel and a
+  // detached assistant edit the same history, and the cross-document view
+  // in any window lists it.
+  const chats = createChatHistoryStore(join(app.getPath('userData'), 'chats'))
+  ipcMain.handle('chats:get', (_e, path: unknown): Promise<StoredConversation[]> =>
+    typeof path === 'string' && path ? chats.get(path) : Promise.resolve([])
+  )
+  ipcMain.handle('chats:set', async (e, path: unknown, name: unknown, list: unknown): Promise<void> => {
+    if (typeof path !== 'string' || !path) return
+    // The renderer strips a password-protected document's images before it
+    // writes; main holds that line too whenever it knows the document was
+    // unlocked this session — the same belt-and-braces as the picture store
+    const clean = sanitizeConversations(list)
+    const stored = passwordFor(path) !== undefined ? withoutImages(clean) : clean
+    await chats.set(path, typeof name === 'string' ? name : '', stored)
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.isDestroyed() || w.webContents.isDestroyed() || w.webContents.id === e.sender.id) continue
+      w.webContents.send('chats:changed', path)
+    }
+  })
+  // The list a window receives carries no conversation text, and the search
+  // runs here over main's cached summaries: 5 000 conversations' text is
+  // ~22 MB that every listing used to send across (measured 2026-10-23)
+  ipcMain.handle('chats:list', async () => (await chats.list()).map(toMeta))
+  ipcMain.handle('chats:search', async (_e, query: unknown) =>
+    searchConversations(await chats.list(), typeof query === 'string' ? query.slice(0, 500) : '')
+  )
+
+  // Each document's notes, written by the viewer once its marks settle
+  // (shared/research-notes.ts) — what the MCP server reads besides the
+  // conversations. A document unlocked this session is recorded as locked
+  // whatever the renderer sent: its words do not go on disk in the clear.
+  const notes = createNotesStore(join(app.getPath('userData'), 'notes'))
+  /** The file a record is built from, as `mtime:size` — null when unreadable */
+  const fileStamp = async (path: string): Promise<string | null> => {
+    try {
+      const info = await stat(readPathFor(path))
+      return info.isFile() ? `${info.mtimeMs}:${info.size}` : null
+    } catch {
+      return null
+    }
+  }
+  ipcMain.handle('notes:set', async (_e, record: unknown): Promise<void> => {
+    const doc = sanitizeDocNotes(record)
+    // An attachment opened from a filing is our own temp copy — its notes
+    // would name a file the reader never kept
+    if (!doc || doc.path.startsWith(attachmentTempRoot())) return
+    await notes.set(passwordFor(doc.path) !== undefined ? { ...doc, locked: true, notes: [] } : doc)
+    const stamp = await fileStamp(doc.path)
+    if (stamp) {
+      getState().notesScanned[doc.path] = stamp
+      saveState()
+    }
+  })
+
+  // The quiet pass over the recents (src/renderer/src/notes-backfill.ts): a
+  // document read before notes were kept, or changed since its record was
+  // built, has its marks read once from the file — only while some tool may
+  // read, never one kept out, each handed out once per session so two
+  // windows never read the same file
+  const backfillHandedOut = new Set<string>()
+  ipcMain.handle('notes:backfill-targets', async (): Promise<{ path: string; name: string }[]> => {
+    const state = getState()
+    if (!sharesWithAny(state.mcp)) return []
+    const foldCase = process.platform !== 'linux'
+    const recentPaths = new Set(state.recents.map((r) => r.path))
+    // Stamps of documents that have left the recents are not kept
+    for (const p of Object.keys(state.notesScanned)) if (!recentPaths.has(p)) delete state.notesScanned[p]
+    const out: { path: string; name: string }[] = []
+    for (const r of state.recents) {
+      if (backfillHandedOut.has(r.path) || excludedBy(r.path, state.mcp, foldCase)) continue
+      if (r.path.startsWith(attachmentTempRoot())) continue
+      const stamp = await fileStamp(r.path)
+      if (!stamp || state.notesScanned[r.path] === stamp) continue
+      backfillHandedOut.add(r.path)
+      out.push({ path: r.path, name: r.name })
+    }
+    return out
+  })
+
+  // The panel's list of what may be shared: every document with notes or
+  // conversations, and whether it is kept out. The paths stay in the app.
+  ipcMain.handle('mcp:documents', async (): Promise<McpDocument[]> => {
+    const policy = getState().mcp
+    const foldCase = process.platform !== 'linux'
+    const [records, summaries] = await Promise.all([notes.all(), chats.list()])
+    const byPath = new Map<string, McpDocument>()
+    const docOf = (path: string, name: string): McpDocument => {
+      let d = byPath.get(path)
+      if (!d) {
+        d = { path, name, notes: 0, conversations: 0, updatedAt: 0, locked: false, excluded: excludedBy(path, policy, foldCase) }
+        byPath.set(path, d)
+      }
+      return d
+    }
+    for (const n of records) {
+      const d = docOf(n.path, n.name)
+      d.notes = n.notes.length
+      d.locked = n.locked === true
+      d.updatedAt = Math.max(d.updatedAt, n.updatedAt)
+      if (n.title) d.title = n.title
+    }
+    for (const s of summaries) {
+      const d = docOf(s.docPath, s.docName || docNameFromPath(s.docPath))
+      d.conversations++
+      d.updatedAt = Math.max(d.updatedAt, s.updatedAt)
+    }
+    return [...byPath.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  })
+
+  // A document's identity across a move (issue #46; shared/doc-identity.ts):
+  // the renderer reports the /ID[0] it read from the bytes, main records it
+  // and carries over the records of any other path with the same fingerprint
+  // whose file is gone. Every store involved is main's own, so the move is
+  // one place's work and the renderer's position read waits for it.
+  ipcMain.handle(
+    'identity:report',
+    async (_e, path: unknown, name: unknown, fingerprint: unknown): Promise<string[]> => {
+      if (typeof path !== 'string' || !path || !validFingerprint(fingerprint)) return []
+      const state = getState()
+      const result = await rebindIdentity(path, typeof name === 'string' ? name : '', fingerprint, state.fingerprints, {
+        exists: (p) => access(p).then(() => true, () => false),
+        position: {
+          get: async (p) => state.positions[p] ?? null,
+          set: async (p, pos) => {
+            if (pos) state.positions[p] = pos
+            else delete state.positions[p]
+          }
+        },
+        bookmarks: {
+          get: async (p) => getBookmarks(p),
+          set: async (p, list) => setBookmarks(p, list)
+        },
+        conversations: {
+          get: (p) => chats.get(p),
+          set: (p, n, list) => chats.set(p, n, list)
+        },
+        recents: {
+          takeOut: async (p) => {
+            const entry = state.recents.find((r) => r.path === p)
+            if (!entry) return { pinned: false }
+            removeRecentEntry(p)
+            await recentThumbs.forget(p)
+            return { pinned: entry.pinnedAt !== undefined }
+          },
+          pin: async (p) => {
+            pinRecentEntry(p, true)
+          }
+        }
+      })
+      state.fingerprints = result.map
+      saveState()
+      // The notes are the file's own marks, which the viewer writes again
+      // under the new path — the old path's record only names a file gone
+      for (const from of result.from) await notes.remove(from)
+      if (result.from.length > 0) {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('chats:changed', path)
+        }
+      }
+      return result.from
+    }
+  )
+
+  // The library's tidying (issue #46): documents whose file is gone, across
+  // every store main keeps per path, and forgetting them. A draft with unsaved
+  // marks is NOT touched — that is work, not bookkeeping, and the reader can
+  // still save it as a copy from its tab.
+  const tellAllWindows = (): void => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('chats:changed', null)
+    }
+  }
+  ipcMain.handle('library:gone', async (): Promise<GoneDocument[]> => {
+    const state = getState()
+    const summaries = await chats.list()
+    const counts = new Map<string, { name: string; n: number }>()
+    for (const s of summaries) {
+      const c = counts.get(s.docPath) ?? { name: s.docName, n: 0 }
+      c.n++
+      counts.set(s.docPath, c)
+    }
+    const paths = new Set<string>([
+      ...counts.keys(),
+      ...Object.keys(state.positions),
+      ...Object.keys(state.bookmarks),
+      ...Object.keys(state.fingerprints),
+      ...state.recents.map((r) => r.path)
+    ])
+    const out: GoneDocument[] = []
+    for (const p of [...paths].sort()) {
+      // Only a real file path can be known gone; anything else (a URL handed
+      // to the app, a garbage key) is left alone
+      if (!isAbsolute(p)) continue
+      if (await access(p).then(() => true, () => false)) continue
+      const recent = state.recents.find((r) => r.path === p)
+      out.push({
+        path: p,
+        name: counts.get(p)?.name ?? recent?.name ?? basename(p),
+        conversations: counts.get(p)?.n ?? 0,
+        other: p in state.positions || p in state.bookmarks || !!recent
+      })
+    }
+    return out
+  })
+  ipcMain.handle('library:forget', async (_e, paths: unknown): Promise<void> => {
+    if (!Array.isArray(paths)) return
+    const state = getState()
+    for (const p of paths) {
+      if (typeof p !== 'string' || !p) continue
+      await chats.set(p, '', [])
+      await notes.remove(p)
+      delete state.positions[p]
+      delete state.fingerprints[p]
+      if (p in state.bookmarks) setBookmarks(p, [])
+      if (state.recents.some((r) => r.path === p)) {
+        removeRecentEntry(p)
+        await recentThumbs.forget(p)
+      }
+    }
+    saveState()
+    tellAllWindows()
+  })
 
   ipcMain.on('settings:set', (_e, patch: Partial<Settings>) => {
     const state = getState()

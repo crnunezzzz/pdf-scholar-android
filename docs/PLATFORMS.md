@@ -74,9 +74,11 @@ the owner. It is held to the divergences below (31) and nothing else.
    `src/renderer/src/keymap.ts`, where the modifier is written `mod` and
    resolves to Cmd on macOS, Ctrl elsewhere (`parseChord` is the only place that
    decides). Two deliberate exceptions: tab cycling is a literal `ctrl+tab` on
-   every platform (Cmd+Tab is the macOS app switcher), and ctrl+wheel zoom tests
-   `ctrlKey` everywhere via `platform.ts` → `primaryMod` (trackpad pinch arrives
-   as ctrl+wheel, also on macOS). The user can rebind anything from the gear
+   every platform (Cmd+Tab is the macOS app switcher), and wheel zoom
+   (`platform.ts` → `isZoomWheel`) takes Ctrl+wheel everywhere — trackpad pinch
+   arrives as ctrl+wheel, also on macOS — and Cmd+wheel on macOS as well, the
+   mac convention for a mouse (Ctrl+wheel is often the OS's screen zoom there).
+   The user can rebind anything from the gear
    menu's **Hurtigtaster** map; overrides live in `Settings.keymap` and are
    stored as `mod`, so one keymap means the same thing on either platform.
 4. **File open plumbing**: Windows/Linux get paths via argv + `second-instance`;
@@ -477,24 +479,65 @@ the owner. It is held to the divergences below (31) and nothing else.
     download under the same name (the extension inherits the base bridge here —
     the File System Access picker is reserved for the PDF itself). Nothing
     about the picture changes between them.
-25. **The ChatGPT-plan sign-in is desktop-only (experimental).** Provider
-    `chatgpt` runs the assistant on a Plus/Pro subscription's allowance through
-    the sign-in Codex CLI uses — its public OAuth client and the
-    `chatgpt.com/backend-api/codex/responses` backend (`src/main/chatgpt-auth.ts`,
-    `chatgptTarget` in `src/shared/ai-chat.ts`). That client's redirect is
-    registered to `http://localhost:1455/auth/callback`, and only a process
-    that can listen on a local port can receive it; an extension page cannot,
-    and `chrome.identity`'s redirect is not one the Codex client accepts. So the
-    extension and the web preview report `chatgpt.supported: false`: the
-    settings row reads «Bare i skrivebordsappen», the model menu leaves the
-    group out, and `aiChatgptLogin` answers `ai-chatgpt-login-unsupported`.
-    Every other surface — request shaping, the quote contract, citations — is
-    the OpenAI Responses path unchanged, so nothing else differs. OpenAI runs
-    no sign-in program for third-party apps; this rides a door OpenAI keeps
-    open by policy, and it can close. The API-key provider stays the supported
-    route on every platform. Covered by `npm run test:ai-chat` (address,
-    headers, `store: false`, the named 401/429 failures); a signed-in plan
-    joins `npm run test:live`.
+25. **The ChatGPT-plan sign-in happens on the desktop; the extension borrows
+    it (experimental).** Provider `chatgpt` runs the assistant on a Plus/Pro
+    subscription's allowance through the sign-in Codex CLI uses — its public
+    OAuth client and the `chatgpt.com/backend-api/codex/responses` backend
+    (`src/main/chatgpt-auth.ts`, `chatgptTarget` in `src/shared/ai-chat.ts`).
+    That client's redirect is registered to `http://localhost:1455/auth/callback`,
+    and only a process that can listen on a local port can receive it; an
+    extension page cannot, and `chrome.identity`'s redirect is not one the
+    Codex client accepts. So the extension never signs in itself: it uses the
+    INSTALLED desktop app's sign-in through Chrome/Edge native messaging
+    (`src/shared/native-host.ts` has the design, 2026-11-01). The browser starts
+    the app on demand — it need not be open — as a windowless host that runs
+    the request with the same `runProviderChat` and streams the deltas back
+    (`src/main/native-host.ts`); no token, refresh or access, reaches the
+    extension. Two steps, because Electron writes `\r\n` on stdout before any
+    code runs and the browser reads the first four bytes as a length: the
+    manifest names a launcher (resources\native-host\pdf-scholar-host.cmd on
+    Windows; a shell script in userData/native-host on macOS/Linux) that runs
+    the app in Node mode on a relay (`src/main/native-host-relay.ts`), which
+    starts the app again as the host and drops everything before its ready
+    marker. The sign-in bundle moved out of the state file into
+    userData/chatgpt-signin.bin (`src/main/chatgpt-store.ts`), and both
+    processes renew it under one file lock (`src/main/chatgpt-renew.ts`,
+    `file-lock.ts`) — the refresh token rotates, and two renewals from one
+    bundle would leave the loser with a spent token that reads as signed out.
+    The installed app writes the manifest and, on Windows, one HKCU key per
+    browser at every start (`src/main/native-host-register.ts`; the NSIS
+    uninstaller takes the keys back). It admits the two store IDs and any ID in
+    userData/native-host-origins.json, where `npm run ext:local` puts the
+    unpacked build's. The extension asks for `nativeMessaging` as an OPTIONAL
+    permission from the «Bruk innloggingen fra skrivebordsappen» click, so no
+    install-time warning changed; «Koble fra» gives it back and leaves the
+    desktop's sign-in alone. One Chromium rule bit v0.82.0 the day it shipped:
+    a context's `chrome.runtime` is built once, from the permissions held
+    then, so the page that asks never gains `connectNative` — the request
+    resolves true and the method stays undefined until a reload, which the
+    extension read as «denied» right after the reader had allowed it (measured
+    in Edge 2026-11-02). `extension-ai.ts` therefore reaches the method
+    through a hidden frame of our own origin (`host-frame.html`), opened after
+    the grant and kept for the page's life; a reloaded page has it directly.
+    What does not work, by name: no app or the
+    **Microsoft Store build** (its registry writes are virtualized and its
+    executable cannot be started by another program — `ai-chatgpt-host-missing`,
+    as for the MCP server), an unpackaged dev run (not registered), Linux
+    without a keyring (the bundle lives in the app's memory only — the host
+    finds none, `ai-chatgpt-desktop-signed-out`), a desktop not signed in
+    (same code), the permission refused (`ai-chatgpt-host-denied`), versions
+    that disagree on the protocol (`ai-chatgpt-host-outdated`). The web
+    preview still reports `chatgpt.supported: false` and answers
+    `ai-chatgpt-login-unsupported`. Every other surface — request shaping, the
+    quote contract, citations — is the OpenAI Responses path unchanged, so
+    nothing else differs. OpenAI runs no sign-in program for third-party apps;
+    this rides a door OpenAI keeps open by policy, and it can close. The
+    API-key provider stays the supported route on every platform. Covered by
+    `npm run test:ai-chat` (address, headers, `store: false`, the named
+    401/429 failures) and `npm run test:native-host` (framing, the relay, the
+    manifest/registry/launchers, two processes renewing one bundle); a
+    signed-in plan joins `npm run test:live`. The extension end to end in
+    Edge is a hand check (docs/BROWSER-EXTENSION.md).
 26. **A document's attachments open on the desktop; the browser targets
     download them.** Files embedded in a PDF — the catalog's `/EmbeddedFiles`
     and FileAttachment paperclips — are listed identically everywhere (the top
@@ -576,7 +619,16 @@ the owner. It is held to the divergences below (31) and nothing else.
     one desktop footnote: removing an entry leaves the OS's own recent-documents
     list (the Windows Jump List, the macOS Dock menu) alone, because Electron can
     only clear that list whole. «Bla side for side» is renderer-only and
-    identical everywhere. Covered by `npm run test:session` and
+    identical everywhere. The strip's own ways in (2026-10-28) are the
+    desktop's for the same reason: the sideways-scrolling strip, «Alle faner»
+    with its search on Ctrl+Shift+A and Ctrl+1–9 — the browser has its own tab
+    search and numbered tabs on the very same chords. Ctrl+Shift+C (copy the
+    document's path) is desktop-only too: in Edge and Chrome it is the
+    browser's element picker, and the extension's document menu carries
+    «Kopier sti» instead. Tab groups (2026-10-29, `src/shared/tab-groups.ts`)
+    are the strip's too: Edge and Chrome group their own tabs, and an
+    extension document is one of those. Covered by `npm run test:session`,
+    `test:tab-groups` and
     `test:recent-thumbs` (CI), and by `test:session-desktop`, `test:recents-grid`
     and `test:paged` (desktop session).
 30. **A document that changes on disk follows the file on the desktop only.**
@@ -618,6 +670,138 @@ the owner. It is held to the divergences below (31) and nothing else.
     documents choice: 1 puts the question away (and ends the mosaic), 2 lists
     the documents, 3 stands the three-document mosaic up at once (waiting for
     a third tab); from a mosaic tile it opens with 3 chosen.
+
+31. **The AI conversation history is parity-identical by contract; only the
+    store underneath differs.** (issue #46, 2026-10-22) Every platform keeps
+    every conversation a document has had — nothing evicted — and the panel's
+    history view searches across all documents and opens another document on
+    a conversation picked there. The contract is `PdfxApi.getConversations` /
+    `setConversations` / `listConversations` / `onConversationsChanged`, the
+    rules `src/shared/chat-history.ts`. Desktop: one JSON file per document
+    under `userData/chats` (`src/main/chat-history.ts`), other windows told
+    over IPC. Extension: an IndexedDB record per document
+    (`src/renderer/src/extension-chat-history.ts` — chrome.storage.local is
+    capped at 10 MB and a conversation carries page images), other tabs told
+    over a BroadcastChannel. dev:web: localStorage, the `storage` event.
+    What the old localStorage store held (ten per document, thirty documents)
+    is imported once on first read (`chat-store.ts`). One genuine
+    divergence: a conversation picked for a document that is not open opens
+    the document as a TAB on the desktop (App's `openPath`) and in the
+    detached assistant or the extension as a new window/tab (`newWindow`) —
+    the handoff itself (`pdfx-open-conversation` in localStorage) is the same
+    everywhere. A document opened with a password has its conversations
+    stored without images on every platform (the renderer strips them before
+    the one write path; desktop's main strips them again when it holds the
+    password). The cross-document list never reads the images either:
+    desktop's main keeps a summary per file, re-read only when the file's
+    mtime or size changes; the extension writes a summary record beside each
+    document in the same IndexedDB transaction (database v2; v1 records get
+    theirs on the first listing). Covered by `npm run test:chat-history`
+    (rules + desktop store).
+
+32. **A moved or renamed file keeps its records on the desktop and for a
+    `file://` document in the extension; a URL and a picked file do not.**
+    (issue #46, 2026-10-22) The rule (`src/shared/doc-identity.ts`) moves a
+    path's conversations, bookmarks, position and pinned recents entry to the
+    new path of a document with the same /ID[0] — but only from a path whose
+    file is known to be GONE. Desktop asks the file system. The extension can
+    know that only for a `file://` URL with file access granted (a fetch that
+    fails); an `http(s)` URL that fails may just be offline, and an `fsa:`
+    handle needs a gesture to read, so both read as present and nothing moves
+    from them. dev:web cannot tell at all and never rebinds (`docIdentity`
+    resolves `[]` in `bridge.ts`). Covered by `npm run test:doc-identity`
+    (rule + /ID[0] through both save paths) and `test:identity-desktop`.
+    The library's «Dokumenter som ikke finnes lenger» (`goneDocuments` /
+    `forgetDocuments`) uses the same «gone»: on the desktop every absolute
+    path main keeps anything for, in the extension a `file://` path with
+    file access, in dev:web nothing (the row reads «Alle dokumentene finnes»).
+    Forgetting is bookkeeping and identical everywhere — conversations,
+    position, bookmarks, fingerprint, recents entry and picture — and never
+    touches a draft with unsaved marks. The rest of the «Samtaler» view
+    (search, reading, the other three tidyings, Markdown/JSON export through
+    `saveTextFile`) is the same renderer code on every platform. The search
+    over every document runs where the store is: in main on the desktop
+    (`chats:search` over its cached summaries — a window receives the hits,
+    never the text of every conversation), in the page itself in the
+    extension and dev:web, where the store already lives. The library's
+    badge, sort, filters and the source chip that opens its document on
+    the cited passage are renderer code, identical everywhere; the
+    «Filen finnes ikke» tag reads the same «gone» as above, so dev:web never
+    shows it. Attaching earlier conversations and local files as context
+    (the composer's paperclip, `src/shared/conversation-context.ts` and
+    `src/shared/file-context.ts`) is renderer code too, identical
+    everywhere: the blocks ride in the system prompt of whichever provider,
+    a file is read in the renderer (a PDF through pdf.js, a text file as
+    text — no main-process path, so the extension has it the same), and
+    «Bekreft før deling» counts an attached conversation's document like
+    the open one and names each attached file.
+
+33. **AI tools outside the app (MCP) reach the desktop's notes only; every
+    platform has «Kopier for KI».** (2026-10-29) The MCP server
+    (`src/main/mcp-server.ts`, setup in `docs/MCP.md`) is a process an AI
+    tool starts on its own — the app's executable with
+    `ELECTRON_RUN_AS_NODE=1` on a script main keeps in `userData/mcp` — and
+    reads two stores in userData: the conversations and each document's
+    notes (`userData/notes`, written by the viewer as marks settle,
+    `src/shared/research-notes.ts`). An extension has no process another
+    program could start and no such folder, so `setDocNotes` is a no-op
+    there and in dev:web, `mcpStatus`/`mcpPolicy` answer null, the
+    settings menu offers no «KI-verktøy» entry and the Merknader tab draws
+    no «Deles med KI-verktøy» line; nor is the quiet pass over the recents
+    run (`notesBackfillTargets` answers []). What may be shared — one
+    switch per tool (Claude, Codex, other), all off until the reader turns
+    one on, and the documents and folders kept out — lives in the state
+    file's own `mcp` key (`shared/mcp.ts`), which the server reads on every
+    call; a folder kept out compares without case on Windows and macOS and
+    with it on Linux, as their file systems do. Codex's config.toml lives
+    under `CODEX_HOME` or `~/.codex` on every OS alike. The Merknader tab's «Kopier for KI» is renderer code and
+    identical everywhere (the extension reads its conversations from
+    IndexedDB like the panel does). Within the desktop: Windows (installer
+    and portable zip), macOS and Linux connect alike — on Linux the
+    AppImage's own path is what a tool is told to start (`APPIMAGE`), since
+    the mount it runs from moves on every launch. The **Microsoft Store
+    build cannot connect**: an MSIX app has no execution alias another
+    program could start, and its userData is virtualized away from the path
+    the entry would name; the group says so instead (`mcp-unsupported`).
+    Claude Desktop is found at `%APPDATA%\Claude` and in an MSIX install's
+    virtualized copy, `~/Library/Application Support/Claude` on macOS and
+    `~/.config/Claude` on Linux. Covered by `npm run test:research-notes`
+    (rules, store, the four tools, the config merge, the bundled script
+    over stdio by Node and by Electron in Node mode) and
+    `test:notes-desktop` (the real app writing a record the shipped script
+    then finds).
+
+34. **The AI's default answer language reads the OS's language list on the
+    desktop and the browser's in the extension.** (2026-10-30, issue #75)
+    The answer-language rule itself is renderer code and identical
+    everywhere (`src/renderer/src/ai.ts`): the reader's own words decide
+    where they typed, and a chip, the summary or the passage search fall
+    back to a default (`src/shared/answer-language.ts`) — the interface
+    language, or the system's first language when the interface is English
+    only because we have no dictionary for it. «The system» is
+    `app.getPreferredSystemLanguages()` on the desktop (`systemLanguages` in
+    `PdfxApi`), which also names a language Chromium ships no translation
+    for, where `navigator.language` already reads en-US; a page cannot ask
+    the OS, so the extension and dev:web read `navigator.languages` — the
+    list the reader set in Edge or Chrome, whose first entry is the
+    browser's own interface language. Covered by
+    `npm run test:answer-language`.
+
+35. **The reading font's «Velg …» list comes with no dialog on the desktop
+    and behind the browser's one prompt in the extension.** (2026-10-27,
+    `docs/TYPOGRAPHY.md` § 5) Both ask Chromium's Local Font Access API
+    (`queryLocalFonts`) from the same renderer code, on that click only.
+    Electron passes it through with no permission handler in main and no UI;
+    Edge/Chrome show their own permission bubble, named after the extension,
+    once per origin — a Block there comes back as an empty list, which the
+    renderer reads through the permission state and answers with the common
+    faces that measure as installed plus one hint line. The chips under the
+    field as the name is typed share that list but never prompt: Chromium's
+    list where the state already reads granted (the desktop; the extension
+    once allowed), the measured faces otherwise. dev:web on localhost gets
+    the browser's prompt like the extension; on any origin without the API
+    the button is not drawn and the chips are the measured faces. The typed
+    name — the baseline — is identical everywhere.
 
 ## Maintenance rules
 

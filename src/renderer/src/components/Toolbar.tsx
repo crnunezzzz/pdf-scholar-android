@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   CitedItem,
   CustomTone,
+  CustomToneChoice,
   DoiInfo,
   FileError,
   NightTone,
+  NightToneChoice,
   LanguagePreference,
   Settings,
   ThemeName,
@@ -30,6 +32,22 @@ import previewDocumentQuiet from '../assets/file-icons/document-quiet.png'
 import previewDocumentQuietPlain from '../assets/file-icons/document-quiet-plain.png'
 import previewApp from '../assets/file-icons/app.png'
 import { pickTabIconFile, readTabIconFile } from '../tab-icon'
+import {
+  READING_FONT_MAX_LEN,
+  READING_FONT_X_HEIGHT,
+  applyReadingFont,
+  filterFamilies,
+  isFontInstalled,
+  loadReadingFont,
+  localFontsAvailable,
+  normalizeReadingFont,
+  orderFamilies,
+  readingFontStack,
+  listInstalledFonts,
+  matchFontNames,
+  saveReadingFont,
+} from '../reading-font'
+import type { InstalledFonts } from '../reading-font'
 import { CITATION_STYLES } from '../../../shared/citation-style'
 import type { CitationStyleId } from '../../../shared/citation-style'
 import {
@@ -37,6 +55,8 @@ import {
   CUSTOM_TONE_ORDER,
   customToneCss,
   isPageInverted,
+  lightTint,
+  nightTint,
   NIGHT_TONE_ORDER,
   NIGHT_TONES,
   TUNE_RANGE
@@ -44,9 +64,11 @@ import {
 import { bridge, isAndroid, isElectron, isExtension } from '../bridge'
 import { setWebTakeover, webTakeoverEnabled } from '../extension-takeover'
 import {
+  addCustomColor,
   annotTypeLabel,
   colorLabel,
   FREETEXT_COLORS,
+  hexToRgb,
   HIGHLIGHT_COLORS,
   MARKUP_TOOL_TYPES,
   PEN_COLORS,
@@ -58,6 +80,9 @@ import {
   UNDERLINE_COLORS
 } from '../annotations'
 import type { DrawToolType, MarkupToolType, ShapeToolType } from '../annotations'
+import { CustomSwatch, renderSwatches, useCustomColors, withCustomColors } from './ColorSwatches'
+import { CustomColorPicker } from './SelectionMenu'
+import { cleanCustomColors, forgetColor, rememberColor } from '../../../shared/custom-colors'
 import {
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
@@ -80,6 +105,7 @@ import { READ_ALOUD } from '../flags'
 import { useDismissable } from '../useDismissable'
 import { updateOutcomeText } from './Welcome'
 import ShortcutsDialog from './ShortcutsDialog'
+import { openAiTools } from './AiToolsDialog'
 import {
   bubblesWhileTyping,
   commandForEvent,
@@ -100,10 +126,12 @@ import {
   IconFitPage,
   IconFitWidth,
   IconFullscreen,
+  IconHand,
   IconGear,
   IconComment,
   IconHeart,
   IconKeyboard,
+  IconMarginNotes,
   IconMarker,
   IconMarkupHighlight,
   IconMarkupSquiggly,
@@ -221,6 +249,14 @@ interface Props {
   sidebarOpen: boolean
   canNavBack: boolean
   canNavForward: boolean
+  /** Hand tool (issue #44): a mouse drag moves the page instead of
+   *  selecting. A toggle beside back/forward — it is navigation, not
+   *  marking, so it lives outside the tool fieldset and its lock. */
+  handTool: boolean
+  onToggleHand(): void
+  /** The hand's one option: Space held is the hand while held */
+  spaceHand: boolean
+  onSpaceHandChange(on: boolean): void
   activeTool: ToolName | null
   toolPrefs: Record<DrawPrefKey, ToolPref>
   onToolSelect(tool: ToolName | null): void
@@ -297,9 +333,17 @@ interface Props {
   /** All annotations temporarily hidden (clean reading view) */
   annotsHidden: boolean
   onToggleAnnots(): void
-  /* No marginNotes here: the margin view is toggled from the Merknader tab,
-     the one home for everything comment-related, and the toolbar's duplicate
-     toggle came out on 2026-08-09. */
+  /** The margin view (comments as cards beside the page): a switch in the view
+   *  menu under «Skjul merknader», with the side choice folding out when on.
+   *  The notes tab keeps the same controls — that is the home for everything
+   *  comment-related — but reaching it took three steps, more with the toolbar
+   *  hidden, and the view menu is where the reading surface is shaped
+   *  (Emil, 2026-10-27; the toolbar's own button came out on 2026-08-09 and
+   *  stays out — no new icon in the strip). */
+  marginOn: boolean
+  marginSide: 'left' | 'right'
+  onToggleMargin(): void
+  onMarginSideChange(side: 'left' | 'right'): void
   /** Annotation undo/redo (mirrors Ctrl+Z/Y — needed for pen/touch use) */
   canUndo: boolean
   canRedo: boolean
@@ -344,6 +388,11 @@ interface Props {
   /** Toolbar auto-hide: pinned = always shown, unpinned = reveals on hover */
   toolbarPinned: boolean
   onTogglePin(): void
+  /** The page field was focused by its shortcut: the viewer peeks a tucked
+   *  toolbar so the field is SEEN (issue #61 — Ctrl+G with the toolbar hidden
+   *  used to put the caret in a field with opacity 0, and every digit typed
+   *  went somewhere the reader could not look) */
+  onPageFieldShortcut(): void
   onPresent(): void
   onToggleFullscreen(): void
   /** Split view: a second pages column, equal in every way except that page and
@@ -445,7 +494,9 @@ const LANGUAGES: { id: LanguagePreference; label: string }[] = [
   // Language names stay in their own language — standard for language pickers
   { id: 'nb', label: 'Norsk' },
   { id: 'en', label: 'English' },
-  { id: 'zh', label: '中文（简体）' },
+  // «简体中文», not «中文（简体）»: the same name, short enough to share one
+  // row of the gear menu with the others
+  { id: 'zh', label: '简体中文' },
   { id: 'auto', label: 'Auto' }
 ]
 
@@ -488,6 +539,10 @@ export default function Toolbar({
   sidebarOpen,
   canNavBack,
   canNavForward,
+  handTool,
+  onToggleHand,
+  spaceHand,
+  onSpaceHandChange,
   activeTool,
   toolPrefs,
   onToolSelect,
@@ -537,6 +592,10 @@ export default function Toolbar({
   canSaveInPlace,
   annotsHidden,
   onToggleAnnots,
+  marginOn,
+  marginSide,
+  onToggleMargin,
+  onMarginSideChange,
   canUndo,
   canRedo,
   onUndo,
@@ -560,6 +619,7 @@ export default function Toolbar({
   onOpenAiSettings,
   toolbarPinned,
   onTogglePin,
+  onPageFieldShortcut,
   onPresent,
   onToggleFullscreen,
   splitOpen,
@@ -590,6 +650,10 @@ export default function Toolbar({
   /** Which column's zoom readout is being typed into (null = neither) */
   const [zoomEditing, setZoomEditing] = useState<'a' | 'b' | null>(null)
   const [zoomInput, setZoomInput] = useState('')
+  /** The remembered colour-wheel picks, after the fixed palette in the
+   *  marker and markup menus — the same swatches the selection menu offers,
+   *  so a colour picked there is a colour the tools can use (issue #50) */
+  const customColors = useCustomColors()
   // Reading-mode menu (themes) and the Visning menu (zoom, page layout,
   // screen, windows) are separate surfaces: one is about how the PAPER looks,
   // the other about how it is laid out in the window.
@@ -598,6 +662,95 @@ export default function Toolbar({
    *  COMMITTED to settings on release — settings:set is a synchronous file
    *  write per call, and a drag emits dozens of ticks. null = not dragging. */
   const [tuneDraft, setTuneDraft] = useState<{ key: 'sepia' | 'night' | 'custom'; value: number } | null>(null)
+  // The reading font (docs/TYPOGRAPHY.md § 6). The field's draft follows the
+  // keystrokes and feeds the sample line; the face itself is committed on
+  // Enter or on leaving the field, so the reading surfaces never flicker
+  // through every prefix of a name. Re-read whenever the menu opens, since
+  // the app-wide reset (PdfViewer) clears the store behind this component.
+  const [readingFont, setReadingFont] = useState(loadReadingFont)
+  const [fontDraft, setFontDraft] = useState(readingFont)
+  useEffect(() => {
+    if (!themeMenuOpen) return
+    const stored = loadReadingFont()
+    setReadingFont(stored)
+    setFontDraft(stored)
+    setFontPicker((p) => (p === 'gone' ? p : 'idle'))
+    setFontHover(null)
+  }, [themeMenuOpen])
+  const commitReadingFont = (raw: string): void => {
+    const name = normalizeReadingFont(raw)
+    setFontDraft(name)
+    if (name === readingFont) return
+    setReadingFont(name)
+    saveReadingFont(name)
+    applyReadingFont(name)
+  }
+  const fontDraftName = normalizeReadingFont(fontDraft)
+  const fontInstalled = useMemo(() => isFontInstalled(fontDraftName), [fontDraftName])
+  // The machine's faces, ONE list behind two offers (TYPOGRAPHY.md § 5–6):
+  // chips under the field as the name is typed, and the whole list behind
+  // «Velg …». The list is asked for on the first keystroke WITHOUT a prompt
+  // (Chromium's where the state already reads granted — the desktop — else
+  // the common faces that measure as installed) and again, the browser's one
+  // prompt allowed, on the «Velg …» click. A Block in the extension comes
+  // back as an empty list, read through the permission state; the measured
+  // list then stands in and the open list says so. Either way a pick fills
+  // the same field through commitReadingFont, so the typed name stays the
+  // baseline and the sample, the missing-hint and the reset are untouched.
+  const [fontFaces, setFontFaces] = useState<InstalledFonts | null>(null)
+  const [fontPicker, setFontPicker] = useState<'idle' | 'busy' | 'open' | 'gone'>(() =>
+    localFontsAvailable() ? 'idle' : 'gone'
+  )
+  const [fontActive, setFontActive] = useState(-1)
+  const [fontHover, setFontHover] = useState<string | null>(null)
+  const fontInputRef = useRef<HTMLInputElement>(null)
+  const fontListRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!fontDraftName || fontFaces !== null) return
+    let live = true
+    void listInstalledFonts(false).then((faces) => {
+      if (live) setFontFaces(faces)
+    })
+    return () => {
+      live = false
+    }
+  }, [fontDraftName, fontFaces])
+  const closeFontList = (): void => {
+    setFontPicker((p) => (p === 'open' ? 'idle' : p))
+    setFontHover(null)
+  }
+  const openFontPicker = async (): Promise<void> => {
+    setFontPicker('busy')
+    const faces = await listInstalledFonts(true)
+    setFontFaces(faces)
+    setFontActive(-1)
+    setFontPicker('open')
+    fontInputRef.current?.focus()
+  }
+  const pickFont = (name: string): void => {
+    commitReadingFont(name)
+    closeFontList()
+  }
+  // With the committed name in the field the whole list shows, the current
+  // face first; anything else typed narrows it
+  const fontChoices = useMemo(() => {
+    if (fontPicker !== 'open' || !fontFaces) return []
+    const query = fontDraftName === readingFont ? '' : fontDraft
+    return filterFamilies(orderFamilies(fontFaces.families, readingFont), query)
+  }, [fontPicker, fontFaces, readingFont, fontDraft, fontDraftName])
+  // The chips as the name is typed; the open list narrows itself instead
+  const fontSuggestions = useMemo(
+    () =>
+      fontFaces && fontDraftName && fontPicker !== 'open' ? matchFontNames(fontDraftName, fontFaces.families) : [],
+    [fontFaces, fontDraftName, fontPicker]
+  )
+  useEffect(() => {
+    if (fontActive < 0) return
+    const item = fontListRef.current?.children[fontActive]
+    if (item instanceof HTMLElement) item.scrollIntoView({ block: 'nearest' })
+  }, [fontActive])
+  // The sample follows the hovered row while the list is open
+  const fontSampleName = fontHover ?? fontDraftName
   const [viewMenuOpen, setViewMenuOpen] = useState(false)
   // Save is a split button: the frequent action (write changes back to the
   // file) stays one click, the rare one (save a copy) moves behind the
@@ -686,6 +839,8 @@ export default function Toolbar({
   // The gear menu: the app's technical surface (language, annotation
   // visibility, AI setup, update check, reset, version/about)
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  /** The gear menu's file/tab-icon picker, folded to one row until opened */
+  const [iconPickerOpen, setIconPickerOpen] = useState(false)
   const [resetAsk, setResetAsk] = useState(false)
   /** The keyboard map, opened from the gear menu */
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -750,7 +905,7 @@ export default function Toolbar({
   /** Which tool has its option menu open. Named, because the overflow rows
    *  refer to it too now — a folded tool opens the same menu its inline
    *  chevron would. */
-  type ToolMenuKey = DrawPrefKey | 'markup' | 'eraser' | 'text' | 'signature'
+  type ToolMenuKey = DrawPrefKey | 'markup' | 'eraser' | 'text' | 'signature' | 'hand'
   const [toolMenu, setToolMenu] = useState<ToolMenuKey | null>(null)
   // Last markup type the user activated, so the split button's main click
   // re-arms that type rather than always defaulting to highlight
@@ -758,11 +913,14 @@ export default function Toolbar({
   const themeMenuRef = useRef<HTMLDivElement>(null)
   const viewMenuRef = useRef<HTMLDivElement>(null)
   const saveMenuRef = useRef<HTMLDivElement>(null)
-  const toolMenuRef = useRef<HTMLFieldSetElement>(null)
+  const toolMenuRef = useRef<HTMLDivElement>(null)
   const settingsMenuRef = useRef<HTMLDivElement>(null)
   /** The page field, so the Gå-til-side command can focus it. Only ever one is
    *  rendered — the single cluster drives whichever column is active. */
   const pageInputRef = useRef<HTMLInputElement>(null)
+  /** Read through a ref by the once-mounted shortcut listener below */
+  const onPageFieldShortcutRef = useRef(onPageFieldShortcut)
+  onPageFieldShortcutRef.current = onPageFieldShortcut
   // Responsive overflow: secondary buttons fold into a "…" menu (left of the
   // protected Assistant button) when the toolbar is too narrow for them all.
   const toolbarRef = useRef<HTMLDivElement>(null)
@@ -850,6 +1008,12 @@ export default function Toolbar({
         setResetAsk(false)
         return
       }
+      // The font list closes before the menu that holds it
+      if (fontPicker === 'open') {
+        setFontPicker('idle')
+        setFontHover(null)
+        return
+      }
       setThemeMenuOpen(false)
       setViewMenuOpen(false)
       setSaveMenuOpen(false)
@@ -859,7 +1023,7 @@ export default function Toolbar({
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [themeMenuOpen, viewMenuOpen, saveMenuOpen, settingsMenuOpen, overflowMenuOpen, toolMenu, resetAsk])
+  }, [themeMenuOpen, viewMenuOpen, saveMenuOpen, settingsMenuOpen, overflowMenuOpen, toolMenu, resetAsk, fontPicker])
 
   // «Gå til side» is the toolbar's own shortcut: the command focuses the page
   // field, which lives here, so the listener does too rather than routing a
@@ -875,6 +1039,10 @@ export default function Toolbar({
       if (!el) return // the cluster is folded away — nothing to focus
       e.preventDefault()
       e.stopPropagation()
+      // A tucked toolbar is translated away at opacity 0, which focus() does
+      // not mind — so the viewer is told first, and peeks it, before the caret
+      // lands (issue #61)
+      onPageFieldShortcutRef.current()
       el.focus()
       // …and select explicitly. The field's own onFocus does this for a CLICK,
       // but a programmatic focus lets the caret land at the end instead, and
@@ -1161,6 +1329,7 @@ export default function Toolbar({
     { key: 'markup', icon: <IconTextMarkup size={15} />, label: t('tb.markup'), onClick: () => onMarkupSelect(activeMarkup ? null : markupType), active: !!activeMarkup, opts: 'markup', disabled: toolsLocked },
     { key: 'marker', icon: <IconMarker size={15} />, label: t('tb.marker'), onClick: () => onToolSelect(activeTool === 'marker' ? null : 'marker'), active: activeTool === 'marker', opts: 'marker', disabled: toolsLocked },
     { key: 'pen', icon: <IconPen size={15} />, label: t('tb.pen'), onClick: () => onToolSelect(activeTool === 'pen' ? null : 'pen'), active: activeTool === 'pen', opts: 'pen', disabled: toolsLocked },
+    { key: 'hand', icon: <IconHand size={15} />, label: t('tb.hand'), onClick: onToggleHand, active: handTool, opts: 'hand' },
     { key: 'present', icon: <IconPresent size={15} />, label: t('tb.present'), onClick: onPresent },
     // On Android the fullscreen button never folds: it is the phone's way into
     // (and, from the swiped-down toolbar, out of) the page-only view
@@ -1271,7 +1440,7 @@ export default function Toolbar({
             the pen case — black, red, green, yellow, blue — and not the markup
             palette these borrowed until v0.36.0, which had no black in it. */}
         <div className="color-row">
-          {(tool === 'marker' ? HIGHLIGHT_COLORS : PEN_COLORS).map((c) => (
+          {renderSwatches(withCustomColors(tool === 'marker' ? HIGHLIGHT_COLORS : PEN_COLORS, customColors), (c) => (
             <button
               key={c.hex}
               className={`color-dot${pref.color.join() === c.rgb.join() ? ' selected' : ''}`}
@@ -1280,6 +1449,14 @@ export default function Toolbar({
               onClick={() => onToolPrefChange(tool, { color: c.rgb })}
             />
           ))}
+          {/* The same «+» as the selection menu's rows: a pick is remembered
+              for every palette and becomes this tool's colour at once */}
+          <CustomColorPicker
+            onPick={(hex) => {
+              addCustomColor(hex)
+              onToolPrefChange(tool, { color: hexToRgb(hex) })
+            }}
+          />
         </div>
         <div className="theme-menu-label slider-label">
           {t('tb.width')}
@@ -1387,7 +1564,19 @@ export default function Toolbar({
    *  under, and until now that meant its options were simply gone until you
    *  widened the window — with «Figurer» the worst of it, since that button IS
    *  its menu and the folded row silently drew a rectangle instead. */
-  const toolPopover =toolMenu === 'signature' ? (
+  const toolPopover = toolMenu === 'hand' ? (
+            <div className="tool-menu">
+              <div className="theme-menu-label">{t('tb.hand')}</div>
+              <label className="theme-menu-toggle" title={t('tb.spaceHandTip')}>
+                <input
+                  type="checkbox"
+                  checked={spaceHand}
+                  onChange={(e) => onSpaceHandChange(e.target.checked)}
+                />
+                {t('tb.spaceHand')}
+              </label>
+            </div>
+          ) : toolMenu === 'signature' ? (
             signatureMenu
           ) : toolMenu === 'markup' ? (
             <div className="tool-menu">
@@ -1411,7 +1600,7 @@ export default function Toolbar({
                 })}
               </div>
               <div className="color-row">
-                {(markupType === 'highlight' ? HIGHLIGHT_COLORS : UNDERLINE_COLORS).map((c) =>
+                {renderSwatches(withCustomColors(markupType === 'highlight' ? HIGHLIGHT_COLORS : UNDERLINE_COLORS, customColors), (c) =>
                   markupType === 'highlight' ? (
                     <button
                       key={c.hex}
@@ -1431,6 +1620,12 @@ export default function Toolbar({
                     </button>
                   )
                 )}
+                <CustomColorPicker
+                  onPick={(hex) => {
+                    addCustomColor(hex)
+                    onMarkupPrefChange(markupType, { color: hexToRgb(hex) })
+                  }}
+                />
               </div>
               <div className="theme-menu-label slider-label">
                 {t('tb.opacity')}
@@ -1454,7 +1649,7 @@ export default function Toolbar({
             <div className="tool-menu">
               <div className="theme-menu-label">{t('tb.textTool')}</div>
               <div className="color-row">
-                {FREETEXT_COLORS.map((c) => (
+                {renderSwatches(withCustomColors(FREETEXT_COLORS, customColors), (c) => (
                   <button
                     key={c.hex}
                     className={`color-dot${textPref.color.join() === c.rgb.join() ? ' selected' : ''}`}
@@ -1463,6 +1658,14 @@ export default function Toolbar({
                     onClick={() => onTextPrefChange({ color: c.rgb })}
                   />
                 ))}
+                {/* The box's own popover offers the wheel for a text box; the
+                    tool's menu offers the same (parity, 2026-10-24) */}
+                <CustomColorPicker
+                  onPick={(hex) => {
+                    addCustomColor(hex)
+                    onTextPrefChange({ color: hexToRgb(hex) })
+                  }}
+                />
               </div>
               <div className="theme-menu-label slider-label">
                 {t('tb.fontSize')}
@@ -1602,11 +1805,35 @@ export default function Toolbar({
 
         <div className="toolbar-sep" />
 
+        {/* The hand and the marking tools are one cluster (Emil, 2026-10-20:
+            no divider between the hand and the pen), so one menu anchor
+            covers them all and the hand's own popover opens under the hand.
+            The hand stays OUTSIDE the fieldset: it draws nothing, so a
+            document that takes no marks may still be dragged. */}
+        <div className="tool-cluster" ref={toolMenuRef}>
+        {inline('hand') && (
+          <span className="tb-split">
+            <button
+              className={`tb-btn${handTool ? ' is-active' : ''}`}
+              onClick={onToggleHand}
+              title={withShortcut(t('tb.handTip'), 'nav.hand')}
+            >
+              <IconHand />
+            </button>
+            <button
+              className={`tb-chevron${toolMenu === 'hand' ? ' is-active' : ''}`}
+              title={t('tb.toolOptionsTip')}
+              onClick={() => setToolMenu((m) => (m === 'hand' ? null : 'hand'))}
+            >
+              <IconChevronDown size={11} />
+            </button>
+          </span>
+        )}
+        {toolMenu === 'hand' && inline('hand') ? toolPopover : null}
         {/* A fieldset, so one `disabled` reaches every tool button and chevron
             in the group at once when the document takes no marks */}
         <fieldset
           className="tool-group"
-          ref={toolMenuRef}
           disabled={toolsLocked}
           title={toolsLocked ? t('tb.xfaToolsOffTip') : undefined}
         >
@@ -1748,8 +1975,9 @@ export default function Toolbar({
             </button>
           )}
 
-          {toolMenu && inline(toolMenu === 'shape' ? 'shapes' : toolMenu) ? toolPopover : null}
+          {toolMenu && toolMenu !== 'hand' && inline(toolMenu === 'shape' ? 'shapes' : toolMenu) ? toolPopover : null}
         </fieldset>
+        </div>
       </div>
 
       {/* Only rendered for the rare document that IS signed — see
@@ -2307,8 +2535,50 @@ export default function Toolbar({
                       ? settings.autoLight
                       : null
                 const showNightTones = settings.theme === 'night' || (inAuto && settings.autoDark === 'night')
-                const activeLightTone: CustomTone | null =
+                const activeLightTone: CustomToneChoice | null =
                   lightPick === 'sepia' ? 'sepia' : lightPick === 'custom' ? settings.customTone : null
+
+                /** The picked tints of one tone row and the «+» that adds
+                 *  one. A tint is chosen as it is picked; forgetting the tint
+                 *  in use goes back to that row's default tone. */
+                const tintsRow = (
+                  stored: string[],
+                  active: string | null,
+                  chipClass: string,
+                  choose: (tint: string, tints: string[]) => void,
+                  toTint: (hex: string) => string,
+                  forget: (tints: string[], wasActive: boolean) => void
+                ): React.JSX.Element => {
+                  const tints = cleanCustomColors(stored)
+                  return (
+                    <div className="theme-auto-row tone-tints">
+                      <span className="theme-auto-label">{t('tb.customTints')}</span>
+                      <div className="theme-auto-choices">
+                        {tints.map((tint) => (
+                          <CustomSwatch
+                            key={tint}
+                            hex={tint}
+                            onForget={(hex) => forget(forgetColor(tints, hex), hex === active)}
+                          >
+                            <button
+                              className={`tone-chip tone-chip-tint${chipClass}${active === tint ? ' selected' : ''}`}
+                              style={{ background: tint }}
+                              title={tint.toUpperCase()}
+                              aria-label={tint.toUpperCase()}
+                              onClick={() => choose(tint, tints)}
+                            />
+                          </CustomSwatch>
+                        ))}
+                        <CustomColorPicker
+                          onPick={(hex) => {
+                            const tint = toTint(hex)
+                            choose(tint, rememberColor(tints, tint))
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )
+                }
 
                 /** One strength slider. Live preview only while the axis is the
                  *  theme on screen; otherwise it just commits. */
@@ -2385,6 +2655,20 @@ export default function Toolbar({
                             ))}
                           </div>
                         </div>
+                        {tintsRow(
+                          settings.customTints,
+                          activeLightTone,
+                          '',
+                          (tint, customTints) =>
+                            onSettingsChange({
+                              ...(inAuto ? { autoLight: 'custom' } : { theme: 'custom' }),
+                              customTone: tint as CustomToneChoice,
+                              customTints
+                            }),
+                          lightTint,
+                          (customTints, wasActive) =>
+                            onSettingsChange({ customTints, ...(wasActive ? { customTone: 'sepia' } : {}) })
+                        )}
                       </div>
                     )}
                     {lightPick && slider(lightPick === 'sepia' ? 'sepia' : 'custom')}
@@ -2414,6 +2698,16 @@ export default function Toolbar({
                             })}
                           </div>
                         </div>
+                        {tintsRow(
+                          settings.nightTints,
+                          settings.nightTone,
+                          ' tone-chip-dark',
+                          (tint, nightTints) =>
+                            onSettingsChange({ nightTone: tint as NightToneChoice, nightTints }),
+                          nightTint,
+                          (nightTints, wasActive) =>
+                            onSettingsChange({ nightTints, ...(wasActive ? { nightTone: 'warm' } : {}) })
+                        )}
                       </div>
                     )}
                     {/* No brightness slider for «Hvitt»: nothing is inverted,
@@ -2422,6 +2716,140 @@ export default function Toolbar({
                   </>
                 )
               })()}
+              {/* The reading font: a face the machine has, by name, for the
+                  reading surfaces — the assistant's answers, comments, the
+                  preview card — never the menus. Empty is the system face. */}
+              <div className="theme-font">
+                <div className="slider-label">
+                  <span title={t('tb.readingFontTip')}>{t('tb.readingFont')}</span>
+                </div>
+                <div className="theme-font-row">
+                  <input
+                    ref={fontInputRef}
+                    className="theme-font-input"
+                    type="text"
+                    value={fontDraft}
+                    placeholder={t('tb.readingFontPlaceholder')}
+                    spellCheck={false}
+                    autoComplete="off"
+                    maxLength={READING_FONT_MAX_LEN}
+                    onChange={(e) => {
+                      setFontDraft(e.target.value)
+                      setFontActive(-1)
+                    }}
+                    onBlur={() => {
+                      commitReadingFont(fontDraft)
+                      closeFontList()
+                    }}
+                    onKeyDown={(e) => {
+                      if (fontPicker === 'open' && fontChoices.length > 0) {
+                        if (e.key === 'ArrowDown') {
+                          e.preventDefault()
+                          setFontActive((i) => Math.min(i + 1, fontChoices.length - 1))
+                          return
+                        }
+                        if (e.key === 'ArrowUp') {
+                          e.preventDefault()
+                          setFontActive((i) => Math.max(i - 1, 0))
+                          return
+                        }
+                        if (e.key === 'Enter' && fontActive >= 0 && fontActive < fontChoices.length) {
+                          e.preventDefault()
+                          pickFont(fontChoices[fontActive])
+                          return
+                        }
+                      }
+                      if (e.key === 'Enter') commitReadingFont(fontDraft)
+                    }}
+                  />
+                  {fontPicker !== 'gone' && (
+                    <button
+                      type="button"
+                      className="theme-font-pick"
+                      title={t('tb.readingFontPickTip')}
+                      disabled={fontPicker === 'busy'}
+                      // Keep the focus in the field (its blur would close the
+                      // list this click toggles)
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => (fontPicker === 'open' ? closeFontList() : void openFontPicker())}
+                    >
+                      {fontPicker === 'busy' ? t('tb.readingFontPicking') : t('tb.readingFontPick')}
+                    </button>
+                  )}
+                </div>
+                {/* The installed faces the typed name opens, each chip in its
+                    own face; gone once the whole name stands in the field, and
+                    while the list below is open and narrows itself */}
+                {fontSuggestions.length > 0 && (
+                  <div className="theme-auto-choices theme-font-suggest" aria-label={t('tb.readingFontSuggest')}>
+                    {fontSuggestions.map((name) => (
+                      <button
+                        key={name}
+                        className="theme-chip"
+                        style={{ fontFamily: readingFontStack(name) }}
+                        // Keep the focus (and the caret) in the field: a blur
+                        // would commit the half-typed name first
+                        onPointerDown={(e) => e.preventDefault()}
+                        onClick={() => commitReadingFont(name)}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {fontPicker === 'open' && (
+                  <div
+                    ref={fontListRef}
+                    className="theme-font-list"
+                    role="listbox"
+                    // Keep the focus in the field: a blur here would commit a
+                    // half-typed filter as the face before the pick lands
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseLeave={() => setFontHover(null)}
+                  >
+                    {fontChoices.length === 0 ? (
+                      <div className="theme-font-empty">{t('tb.readingFontNoMatch')}</div>
+                    ) : (
+                      fontChoices.map((name, i) => (
+                        <button
+                          key={name}
+                          type="button"
+                          role="option"
+                          aria-selected={name === readingFont}
+                          className={
+                            'theme-font-item' +
+                            (i === fontActive ? ' active' : '') +
+                            (name === readingFont ? ' current' : '')
+                          }
+                          onMouseEnter={() => setFontHover(name)}
+                          onClick={() => pickFont(name)}
+                        >
+                          {name}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+                <div
+                  className="theme-font-sample"
+                  style={
+                    fontSampleName
+                      ? // A string: React appends px to a number here, and the
+                        // adjustment is a bare ratio
+                        { fontFamily: readingFontStack(fontSampleName), fontSizeAdjust: String(READING_FONT_X_HEIGHT) }
+                      : undefined
+                  }
+                >
+                  {t('tb.readingFontSample')}
+                </div>
+                {fontDraftName && fontInstalled === false && !fontHover && (
+                  <div className="theme-auto-hint">{t('tb.readingFontMissing')}</div>
+                )}
+                {fontPicker === 'open' && fontFaces?.refused && (
+                  <div className="theme-auto-hint">{t('tb.readingFontDenied')}</div>
+                )}
+                <ResetLink hidden={!readingFont && !fontDraftName} onClick={() => commitReadingFont('')} />
+              </div>
               <div className="theme-menu-sep" />
 
               {/* Both of these shape the READING experience rather than the
@@ -2435,6 +2863,30 @@ export default function Toolbar({
                 {annotsHidden ? <IconEyeOff size={15} /> : <IconEye size={15} />}
                 {t('tb.hideAnnots')}
               </label>
+              {/* The margin view, right under the other switch that decides
+                  what of the marks is seen. The side choice folds out only
+                  while it is on — off, the row is one line like the others. */}
+              <label className="theme-menu-toggle" title={withShortcut(t('tb.marginNotesTip'), 'view.marginNotes')}>
+                <input type="checkbox" checked={marginOn} onChange={onToggleMargin} />
+                <IconMarginNotes size={15} />
+                {t('tb.marginNotes')}
+              </label>
+              {marginOn && (
+                <div className="theme-auto-row theme-margin-side">
+                  <span className="theme-auto-label">{t('margin.sideLabel')}</span>
+                  <div className="theme-auto-choices">
+                    {(['left', 'right'] as const).map((s) => (
+                      <button
+                        key={s}
+                        className={`theme-chip${marginSide === s ? ' selected' : ''}`}
+                        onClick={() => onMarginSideChange(s)}
+                      >
+                        {t(s === 'left' ? 'margin.sideLeft' : 'margin.sideRight')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* Night themes invert the whole page raster — this repaints the
                   picture regions in their original colours. Only offered while
                   a night theme is what the reader sees: in day/sepia nothing
@@ -2461,10 +2913,8 @@ export default function Toolbar({
           )}
         </div>
 
-        {/* No margin-comments toggle here (Emil, 2026-08-09). The switch — and
-            the left/right choice that belongs with it — already live in the
-            notes tab, which is the one home for everything comment-related; this
-            was a second copy of a control that was never in the wrong place. */}
+        {/* No margin-comments BUTTON in the strip (Emil, 2026-08-09): the
+            switch lives in the view menu above, with the notes tab's copy. */}
         {inline('split') && (
           <button
             className={`tb-btn${splitOpen || splitPickerOpen ? ' is-active' : ''}`}
@@ -2519,43 +2969,43 @@ export default function Toolbar({
                 ))}
               </div>
 
-              <div className="theme-menu-sep" />
-
               {/* Author (/T) written into new annotations — the standard PDF
                   field other readers show as the commenter. No accounts, so
                   the name is simply typed once; empty = unsigned. The detail
                   lives in the hover title, not a permanent paragraph — the
                   label + placeholder carry enough on their own (standing
-                  hover-hints preference). */}
-              <div className="theme-menu-label" title={t('settings.annotAuthorHint')}>
-                {t('settings.annotAuthor')}
-              </div>
-              <input
-                className="annot-author-input"
-                defaultValue={settings.annotAuthor}
-                placeholder={t('settings.annotAuthorPlaceholder')}
-                title={t('settings.annotAuthorHint')}
-                spellCheck={false}
-                onKeyDown={(e) => {
-                  // Even in a menu: Ctrl+S from here should still save
-                  if (bubblesWhileTyping(e)) return
-                  e.stopPropagation()
-                  if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur()
-                }}
-                onBlur={(e) => {
-                  const name = e.target.value.trim()
-                  if (name !== settings.annotAuthor) onSettingsChange({ annotAuthor: name })
-                }}
-              />
+                  hover-hints preference). One row, the name beside its label:
+                  the gear menu had grown too long (Emil, 2026-10-19). */}
+              <label className="settings-row" title={t('settings.annotAuthorHint')}>
+                <span>{t('settings.annotAuthor')}</span>
+                <input
+                  className="annot-author-input"
+                  defaultValue={settings.annotAuthor}
+                  placeholder={t('settings.annotAuthorPlaceholder')}
+                  spellCheck={false}
+                  onKeyDown={(e) => {
+                    // Even in a menu: Ctrl+S from here should still save
+                    if (bubblesWhileTyping(e)) return
+                    e.stopPropagation()
+                    if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur()
+                  }}
+                  onBlur={(e) => {
+                    const name = e.target.value.trim()
+                    if (name !== settings.annotAuthor) onSettingsChange({ annotAuthor: name })
+                  }}
+                />
+              </label>
 
               <div className="theme-menu-sep" />
 
-              {/* The menu at a text selection — two independent toggles, the
-                  same shape (Emil, 2026-10-04): WHEN it opens and HOW MUCH it
-                  covers. Off, the menu waits for a right-click (long-press on
-                  touch), which has always opened the same menu — for a reader
-                  who selects text to follow along, not to mark it. */}
-              <div className="theme-menu-label">{t('settings.selectionMenu')}</div>
+              {/* Every on/off of reading in one group of switches, no rule
+                  between them (Emil, 2026-10-19). The menu at a text selection
+                  is two independent toggles, the same shape (Emil, 2026-10-04):
+                  WHEN it opens and HOW MUCH it covers. Off, the menu waits for
+                  a right-click (long-press on touch), which has always opened
+                  the same menu — for a reader who selects text to follow
+                  along, not to mark it. */}
+              <div className="theme-menu-label">{t('settings.reading')}</div>
               <label className="theme-menu-toggle" title={t('settings.selectionMenuAutoTip')}>
                 <input
                   type="checkbox"
@@ -2578,7 +3028,6 @@ export default function Toolbar({
               {/* Hover previews of in-document links (issue #31): on/off plus
                   three fixed delays. The delay row stays in place when the
                   previews are off — greyed, so the menu does not jump. */}
-              <div className="theme-menu-sep" />
               <label className="theme-menu-toggle" title={t('settings.linkPreviewTip')}>
                 <input
                   type="checkbox"
@@ -2587,43 +3036,70 @@ export default function Toolbar({
                 />
                 {t('settings.linkPreview')}
               </label>
-              <div
-                className="lang-options link-preview-delays"
-                role="radiogroup"
-                aria-label={t('settings.linkPreviewDelay')}
-                title={t('settings.linkPreviewDelayTip')}
-              >
+              <div className="link-preview-delays" title={t('settings.linkPreviewDelayTip')}>
                 {/* Named: three bare pills under a checkbox read as sizes, not
                     as the wait before the window opens (Emil, 2026-10-13) */}
                 <span className="link-preview-delay-caption">{t('settings.linkPreviewDelay')}</span>
-                {(['short', 'medium', 'long'] as const).map((d) => (
-                  <button
-                    key={d}
-                    role="radio"
-                    aria-checked={settings.linkPreviewDelay === d}
-                    disabled={!settings.linkPreview}
-                    className={`lang-option${settings.linkPreviewDelay === d ? ' selected' : ''}`}
-                    onClick={() => onSettingsChange({ linkPreviewDelay: d })}
-                  >
-                    {t(`settings.linkPreviewDelay.${d}`)}
-                  </button>
-                ))}
+                <div className="lang-options" role="radiogroup" aria-label={t('settings.linkPreviewDelay')}>
+                  {(['short', 'medium', 'long'] as const).map((d) => (
+                    <button
+                      key={d}
+                      role="radio"
+                      aria-checked={settings.linkPreviewDelay === d}
+                      disabled={!settings.linkPreview}
+                      className={`lang-option${settings.linkPreviewDelay === d ? ' selected' : ''}`}
+                      onClick={() => onSettingsChange({ linkPreviewDelay: d })}
+                    >
+                      {t(`settings.linkPreviewDelay.${d}`)}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {/* Text on scanned pages (OCR, on this machine): as they are met,
+                  or only when asked for per document — the toolbar, search
+                  bar and assistant offer «Gjenkjenn tekst» then */}
+              <label className="theme-menu-toggle" title={t('settings.ocrAutoTip')}>
+                <input
+                  type="checkbox"
+                  checked={settings.ocrAuto}
+                  onChange={(e) => onSettingsChange({ ocrAuto: e.target.checked })}
+                />
+                {t('settings.ocrAuto')}
+              </label>
 
               {/* Startup (issue #29). Desktop only: the extension has no tab
                   strip of its own — the browser brings its tabs back itself. */}
               {isElectron && (
-                <>
-                  <div className="theme-menu-sep" />
-                  <label className="theme-menu-toggle" title={t('settings.restoreSessionTip')}>
-                    <input
-                      type="checkbox"
-                      checked={settings.restoreSession}
-                      onChange={(e) => onSettingsChange({ restoreSession: e.target.checked })}
-                    />
-                    {t('settings.restoreSession')}
-                  </label>
-                </>
+                <label className="theme-menu-toggle" title={t('settings.restoreSessionTip')}>
+                  <input
+                    type="checkbox"
+                    checked={settings.restoreSession}
+                    onChange={(e) => onSettingsChange({ restoreSession: e.target.checked })}
+                  />
+                  {t('settings.restoreSession')}
+                </label>
+              )}
+              {/* Extension only: the one thing the extension takes from the
+                  browser that a user may want back — a browser set to download
+                  PDFs was overridden by the redirect with no say in it (issue
+                  #16). Off, only file:// documents open here; the desktop app
+                  has no equivalent, since the OS file association is already
+                  the user's own choice. v0.46.0 put it in the VIEW menu by
+                  mistake, where nobody saw it; it is a switch like the others
+                  here (2026-10-19). */}
+              {isExtension && (
+                <label className="theme-menu-toggle" title={t('tb.webTakeoverTip')}>
+                  <input
+                    type="checkbox"
+                    checked={webTakeover}
+                    onChange={(e) => {
+                      setWebTakeoverState(e.target.checked)
+                      setWebTakeover(e.target.checked)
+                    }}
+                  />
+                  {t('tb.webTakeover')}
+                </label>
               )}
 
               {/* The icon Explorer puts on .pdf files (issue #26): the
@@ -2636,12 +3112,27 @@ export default function Toolbar({
               {iconTarget && (
                 <>
                   <div className="theme-menu-sep" />
-                  <div
-                    className="theme-menu-label"
+                  {/* Folded to one row with the icon in use (Emil, 2026-10-19:
+                      the menu had grown long, and the icon is chosen once) —
+                      the picker opens under it */}
+                  <button
+                    className="menu-action settings-disclosure"
+                    aria-expanded={iconPickerOpen}
                     title={t(iconTarget === 'tab' ? 'settings.tabIconTip' : 'settings.fileIconTip')}
+                    onClick={() => setIconPickerOpen((o) => !o)}
                   >
-                    {t(iconTarget === 'tab' ? 'settings.tabIcon' : 'settings.fileIcon')}
-                  </div>
+                    <span>{t(iconTarget === 'tab' ? 'settings.tabIcon' : 'settings.fileIcon')}</span>
+                    {(() => {
+                      const now =
+                        iconChoice === 'custom' && iconTarget === 'tab'
+                          ? settings.tabIconImage || null
+                          : FILE_ICON_PREVIEWS[iconChoice]
+                      return now ? <img className="settings-disclosure-icon" src={now} alt="" width={18} height={18} /> : null
+                    })()}
+                    <IconChevronDown size={11} />
+                  </button>
+                  {iconPickerOpen && (
+                  <>
                   {/* The choices as the icons themselves — a file icon is
                       judged by eye, not by name. Three colourings, the app
                       logo, and «Eget …» for the reader's own; the switch above
@@ -2703,35 +3194,13 @@ export default function Toolbar({
                             }`
                           : t(FILE_ICON_LABELS[iconChoice === 'app' ? 'app' : 'custom'])}
                   </div>
+                  </>
+                  )}
                   {fileIconNote && <div className="menu-hint">{fileIconNote}</div>}
                 </>
               )}
 
               <div className="theme-menu-sep" />
-
-              {/* Extension only: the one thing the extension takes from the
-                  browser that a user may want back — a browser set to download
-                  PDFs was overridden by the redirect with no say in it (issue
-                  #16). Off, only file:// documents open here; the desktop app
-                  has no equivalent, since the OS file association is already
-                  the user's own choice. Lives here with the app's plumbing —
-                  v0.46.0 put it in the VIEW menu by mistake, where nobody saw it. */}
-              {isExtension && (
-                <>
-                  <label className="theme-menu-toggle" title={t('tb.webTakeoverTip')}>
-                    <input
-                      type="checkbox"
-                      checked={webTakeover}
-                      onChange={(e) => {
-                        setWebTakeoverState(e.target.checked)
-                        setWebTakeover(e.target.checked)
-                      }}
-                    />
-                    {t('tb.webTakeover')}
-                  </label>
-                  <div className="theme-menu-sep" />
-                </>
-              )}
 
               <button
                 className="menu-action"
@@ -2743,6 +3212,22 @@ export default function Toolbar({
                 <IconSparkle size={15} />
                 {t('ai.keysTitle')}
               </button>
+              {/* Its own entry, not part of the keys and providers: those are
+                  the app's own assistant, this is what OTHER tools may read
+                  (Emil, 2026-10-29). Desktop only — nothing else has a process
+                  another program could start. */}
+              {isElectron && (
+                <button
+                  className="menu-action"
+                  onClick={() => {
+                    setSettingsMenuOpen(false)
+                    openAiTools()
+                  }}
+                >
+                  <IconBook size={15} />
+                  {t('mcp.menu')}
+                </button>
+              )}
               <button
                 className="menu-action"
                 title={t('keys.openTip')}
@@ -2769,8 +3254,6 @@ export default function Toolbar({
                   unprompted is already halfway to nagging. The installer's
                   «Open with» association is as far as we go. */}
 
-              <div className="theme-menu-sep" />
-
               <button
                 className="menu-action"
                 onClick={() => {
@@ -2789,31 +3272,32 @@ export default function Toolbar({
                   place they can be answered, so link straight there rather than
                   inventing an in-app form with nowhere to send it. The body is
                   prefilled with the version, which is the one thing a report
-                  needs and the one thing users never think to include. */}
-              <button
-                className="menu-action"
-                onClick={() =>
-                  bridge.openExternal(
-                    'https://github.com/emilmsh/pdf-scholar/issues/new?body=' +
-                      encodeURIComponent(`\n\n---\nPDF Scholar ${appVersion}`)
-                  )
-                }
-                title={t('app.feedbackTip')}
-              >
-                <IconComment size={15} />
-                {t('app.feedback')}
-              </button>
-
-              <button
-                className="menu-action"
-                onClick={() => bridge.openExternal('https://github.com/sponsors/emilmsh')}
-                title={t('app.sponsorTip')}
-              >
-                <IconHeart size={15} />
-                {t('app.sponsor')}
-              </button>
-
-              <div className="theme-menu-sep" />
+                  needs and the one thing users never think to include. With
+                  «Støtt prosjektet», one quiet row over the version line rather
+                  than two menu rows (2026-10-19). */}
+              <div className="menu-footer-links">
+                <button
+                  className="menu-link"
+                  onClick={() =>
+                    bridge.openExternal(
+                      'https://github.com/emilmsh/pdf-scholar/issues/new?body=' +
+                        encodeURIComponent(`\n\n---\nPDF Scholar ${appVersion}`)
+                    )
+                  }
+                  title={t('app.feedbackTip')}
+                >
+                  <IconComment size={13} />
+                  {t('app.feedback')}
+                </button>
+                <button
+                  className="menu-link"
+                  onClick={() => bridge.openExternal('https://github.com/sponsors/emilmsh')}
+                  title={t('app.sponsorTip')}
+                >
+                  <IconHeart size={13} />
+                  {t('app.sponsor')}
+                </button>
+              </div>
 
               <div className="menu-about">
                 <span>{t('settings.about', { version: appVersion })}</span>

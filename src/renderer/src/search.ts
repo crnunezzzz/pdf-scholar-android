@@ -2,14 +2,21 @@
 // cached; matches are located back on screen by mapping character offsets to
 // the pdf.js text-layer spans (spans correspond 1:1 to non-empty text items).
 import type { PDFDocumentProxy } from 'pdfjs-dist'
+import type { TextContent } from 'pdfjs-dist/types/src/display/api'
 import type { PageRect } from '../../shared/types'
 import { clientRectsToPageRects } from './annotations'
+import { OCR_FONT, hasVisibleText } from './ocr-text'
 
 export interface PageText {
   /** Concatenated item strings; '\n' appended after items with hasEOL */
   text: string
   /** Non-empty items only: char offset, length, in span order */
   runs: { start: number; length: number }[]
+  /** The first run OCR read, when the page has any: all of a scanned page's,
+   *  or the words in its images after its own text (ocr-image.ts). What lets
+   *  a text layer built with or without the images' words still be measured
+   *  against this text — the page's own runs are a prefix of both. */
+  ocrRunsFrom?: number
 }
 
 export interface SearchMatch {
@@ -28,44 +35,213 @@ export interface SearchOptions {
 
 const MAX_MATCHES = 500
 
+/** Whether the words OCR reads in a page's IMAGES are waited for. Only search
+ *  waits ('wait', and it shows what it has meanwhile); everything else takes
+ *  what is already read ('available') — a figure is never a reason for the
+ *  assistant or the export to stand still (Emil, 2026-10-23). A scanned page
+ *  has no text without OCR and is waited for either way. */
+export type ImageText = 'wait' | 'available'
+
+/** Where text the PDF lacks comes from: ocr.ts (installOcr) — a scanned
+ *  page's words in place of its empty `own` text, or `own` with its images'
+ *  words appended; null keeps `own`. Injected rather than imported so this
+ *  module — and its tests — stay free of the engine. */
+export type TextFallback = (
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+  own: TextContent,
+  opts: { priority?: number; signal?: AbortSignal; images?: ImageText }
+) => Promise<TextContent | null>
+
+let textFallback: TextFallback | null = null
+
+export function setTextFallback(fallback: TextFallback | null): void {
+  textFallback = fallback
+}
+
+/** How far apart two items may stand and still be one text drawn twice —
+ *  at most this, and never more than a tenth of the glyph size (a poor man's
+ *  bold, LaTeX's \pmb, is three copies 0.04 em apart; a dotted rule drawn
+ *  with full stops 0.2 pt apart collapses too, which costs nothing) */
+const SAME_PLACE_PT = 0.5
+
+/** A page's text with every item drawn TWICE in the same place read once.
+ *
+ *  Some publisher PDFs (Atypon's PDFplus, behind JSTOR and the AEA journals)
+ *  draw every line two times: first as glyph outlines (text render mode 1,
+ *  stroke only, one glyph per Tj) and then filled over them. One text on
+ *  paper, but pdf.js reports both, so a word that occurs twice in the paper
+ *  searched as four, selected and copied as «conductconduct», and read twice
+ *  by the assistant (Emil, 2026-10-26, Einav & Levin 2010 from JSTOR). PDFium
+ *  stumbles on it too — its search found three of the four.
+ *
+ *  The rule: an item with text (a space between two words counts — the
+ *  outline copy has its own), the same string as an earlier item on the
+ *  page, at the same place (within SAME_PLACE_PT) and at the same size is
+ *  the same text and is dropped; its line end carries over to the one kept
+ *  (pdf.js hangs hasEOL on the LAST item of a line — the copy). The widths
+ *  are not compared: the outline copy's, summed over its glyph moves, differs
+ *  from the filled line's. A word repeated elsewhere on the line, a column of
+ *  equal numbers, a word set larger over the same point, the empty items
+ *  that mark a break, an XFA form's text nodes (no positions at all) — all
+ *  untouched; a clean page comes back as the same object. Applied wherever a
+ *  page's text is read — the text layer, search, the assistant, the export —
+ *  so the spans and the runs still correspond 1:1. */
+export function dedupeTextContent(content: TextContent): TextContent {
+  const items = content.items
+  // str → indexes (into `out`) of the kept items with that string
+  const kept = new Map<string, number[]>()
+  const out: TextContent['items'] = []
+  let dropped = false
+  for (const item of items) {
+    // An item with no text is a line or paragraph break, and one with no
+    // position (an XFA form's text nodes) has no place to be the same at
+    if (!('str' in item) || item.str === '' || !Array.isArray(item.transform) || item.transform.length < 6) {
+      out.push(item)
+      continue
+    }
+    const t = item.transform as number[]
+    const size = Math.hypot(t[0], t[1])
+    const near = Math.min(SAME_PLACE_PT, size * 0.1)
+    // A trailing blank does not make it another text: the AEA's footnote
+    // markers are drawn as «2» and then «2 », which read as «22»
+    const key = item.str.trimEnd() || item.str
+    const earlier = kept.get(key)
+    let same = -1
+    if (earlier) {
+      for (const idx of earlier) {
+        const o = (out[idx] as typeof item).transform as number[]
+        // The same place, and the same size AND direction (a «1» drawn
+        // upright and again turned 90° from the same origin is two)
+        if (
+          Math.abs(o[4] - t[4]) <= near &&
+          Math.abs(o[5] - t[5]) <= near &&
+          Math.abs(o[0] - t[0]) <= size * 0.01 &&
+          Math.abs(o[1] - t[1]) <= size * 0.01 &&
+          Math.abs(o[2] - t[2]) <= size * 0.01 &&
+          Math.abs(o[3] - t[3]) <= size * 0.01
+        ) {
+          same = idx
+          break
+        }
+      }
+    }
+    if (same >= 0) {
+      dropped = true
+      const prev = out[same] as typeof item
+      // The copy that carries the blank is kept, so the word after it does
+      // not run on; either one's line end stays
+      const keep = item.str.length > prev.str.length ? item : prev
+      const eol = !!(item.hasEOL || prev.hasEOL)
+      if (keep !== prev || eol !== prev.hasEOL) out[same] = { ...keep, hasEOL: eol }
+      continue
+    }
+    if (earlier) earlier.push(out.length)
+    else kept.set(key, [out.length])
+    out.push(item)
+  }
+  return dropped ? { ...content, items: out } : content
+}
+
+/** A page's text content: its own, or — a scanned page with none — the words
+ *  OCR found on it, or its own with the words in its images after it. The
+ *  ONE place both the text layer's source and every extracted PageText come
+ *  from, so the spans and the runs correspond (see resolveMatchRects). An XFA
+ *  form's text is never read. */
+export async function pageTextContent(
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+  opts: { priority?: number; signal?: AbortSignal; images?: ImageText } = {}
+): Promise<TextContent> {
+  const page = await pdf.getPage(pageNumber)
+  const content = dedupeTextContent(await page.getTextContent())
+  if (!textFallback || pdf.isPureXfa) return content
+  return (await textFallback(pdf, pageNumber, content, opts)) ?? content
+}
+
+/** Text content → page text, with a run per non-empty item */
+function toPageText(content: TextContent, xfa: boolean): PageText {
+  let text = ''
+  const runs: { start: number; length: number }[] = []
+  let ocrRunsFrom: number | undefined
+  for (const item of content.items) {
+    if (!('str' in item)) continue
+    if (item.str !== '') {
+      if (ocrRunsFrom === undefined && item.fontName === OCR_FONT) ocrRunsFrom = runs.length
+      runs.push({ start: text.length, length: item.str.length })
+      text += item.str
+    }
+    // An XFA form's items are the laid-out form's text nodes (a caption, a
+    // paragraph, a label) with no positions and no hasEOL — glued together
+    // they would read «Page of Support for…». Each one ends its own line.
+    if (item.hasEOL || xfa) text += '\n'
+  }
+  return ocrRunsFrom === undefined ? { text, runs } : { text, runs, ocrRunsFrom }
+}
+
 /**
  * One page's text and runs.
  *
  * Split out of buildPageTexts because a whole-document pass is the wrong unit
  * for anything interactive: on a 15-page paper it takes over a second, and the
  * markup-end drag needs exactly one page's text before the hand has finished
- * moving. Extracting that page alone is a few tens of milliseconds.
+ * moving. Extracting that page alone is a few tens of milliseconds — a scanned
+ * page the first time it is read takes the OCR's second or two instead.
  */
 export async function buildPageText(pdf: PDFDocumentProxy, pageNumber: number): Promise<PageText> {
-  const page = await pdf.getPage(pageNumber)
-  const content = await page.getTextContent()
-  // An XFA form's items are the laid-out form's text nodes (a caption, a
-  // paragraph, a label) with no positions and no hasEOL — glued together they
-  // would read «Page of Support for…». Each one ends its own line instead.
-  const xfa = pdf.isPureXfa
-  let text = ''
-  const runs: { start: number; length: number }[] = []
-  for (const item of content.items) {
-    if (!('str' in item)) continue
-    if (item.str !== '') {
-      runs.push({ start: text.length, length: item.str.length })
-      text += item.str
-    }
-    if (item.hasEOL || xfa) text += '\n'
-  }
-  return { text, runs }
+  return toPageText(await pageTextContent(pdf, pageNumber), pdf.isPureXfa)
 }
 
-export async function buildPageTexts(pdf: PDFDocumentProxy): Promise<PageText[]> {
+/**
+ * Every page's text and runs.
+ *
+ * In two passes: first every page's own text (fast), then what OCR adds — a
+ * scanned page's words, a second or two each, and with `images: 'wait'` the
+ * words in the images of pages that have text. `onProgress` hears the pages
+ * as they change — the array in page order, the own text in place from the
+ * first pass on — so a search shows what it has found at once instead of
+ * waiting minutes on a long book. With a `signal` the pass can be given up:
+ * pages not yet read leave the OCR queue and the promise rejects.
+ */
+export async function buildPageTexts(
+  pdf: PDFDocumentProxy,
+  opts: { onProgress?(pages: PageText[]): void; signal?: AbortSignal; images?: ImageText } = {}
+): Promise<PageText[]> {
   const pages: PageText[] = []
-  for (let i = 1; i <= pdf.numPages; i++) pages.push(await buildPageText(pdf, i))
+  const owns: TextContent[] = []
+  let scanned = false
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const content = dedupeTextContent(await page.getTextContent())
+    opts.signal?.throwIfAborted()
+    if (!hasVisibleText(content)) scanned = true
+    owns.push(content)
+    pages.push(toPageText(content, pdf.isPureXfa))
+  }
+  if (!textFallback || pdf.isPureXfa) return pages
+  const fallback = textFallback
+  // The own text is searchable now; what OCR adds follows page by page
+  if (scanned || opts.images === 'wait') opts.onProgress?.(pages.slice())
+  const rest = { images: opts.images ?? 'available', ...(opts.signal ? { signal: opts.signal } : {}) }
+  // All at once, so the queue holds the whole pass (and the pages on screen
+  // can still jump it); each lands in its slot as it is read
+  await Promise.all(
+    owns.map(async (own, i) => {
+      const content = await fallback(pdf, i + 1, own, rest)
+      if (!content) return
+      pages[i] = toPageText(content, false)
+      opts.onProgress?.(pages.slice())
+    })
+  )
   return pages
 }
 
 /** Whether the document has a text layer worth reading at all.
  *
- *  A scanned PDF is pictures of words: getTextContent returns nothing, so every
- *  page comes back as `{ text: '', runs: [] }` with no error anywhere. Callers
+ *  A scanned PDF is pictures of words: getTextContent returns nothing, and
+ *  where OCR could not help either (the engine would not start, the pages are
+ *  photographs) every page comes back as `{ text: '', runs: [] }` with no
+ *  error anywhere. Callers
  *  that would otherwise send an empty document to a model — or search text that
  *  does not exist — have to ask first, because the failure is silent and looks
  *  like the document simply saying nothing.
@@ -135,6 +311,19 @@ export function findMatches(
   return matches
 }
 
+/** Whether a character range lies among the words OCR read in the page's
+ *  images (after its own text) — a range a text layer can only measure once
+ *  those words have joined it, which happens after the layer's first build */
+export function inImageWords(pageText: PageText | undefined, range: { start: number }): boolean {
+  const from = pageText?.ocrRunsFrom
+  if (!pageText || from === undefined || from === 0) return false
+  const first = pageText.runs[from]
+  return !!first && range.start >= first.start
+}
+
+/** «The words in this page's images are in the DOM» */
+export const IMAGE_SPANS_READY_SELECTOR = '.text-host .textLayer > span[data-ocr="image"]'
+
 /** An XFA page's text spans — the laid-out form's text nodes, wrapped in the
  *  order getTextContent() lists them (xfa.ts). */
 const XFA_TEXT_SPANS = '.xfa-host .xfaLayer span.xfa-text'
@@ -150,7 +339,22 @@ export const TEXT_SPANS_READY_SELECTOR = `.text-host .textLayer > span, ${XFA_TE
 function matchSpans(pageEl: HTMLElement, pageText: PageText): NodeListOf<HTMLElement> | null {
   const textLayer = pageEl.querySelectorAll<HTMLElement>('.text-host .textLayer > span')
   const spans = textLayer.length > 0 ? textLayer : pageEl.querySelectorAll<HTMLElement>(XFA_TEXT_SPANS)
-  return spans.length === 0 || spans.length !== pageText.runs.length ? null : spans
+  if (spans.length === 0) return null
+  if (spans.length === pageText.runs.length) return spans
+  // The words OCR read in the page's images come after its own text, in the
+  // layer (spans marked data-ocr="image", PdfPage) and in the text alike —
+  // one of them may have them already and the other not yet. The page's own
+  // words are then still a prefix of both, and measure true; a match among
+  // the images' words finds no span and comes back null (rectsFromSpans).
+  let layerOwn = spans.length
+  for (let i = 0; i < spans.length; i++) {
+    if (spans[i].dataset.ocr === 'image') {
+      layerOwn = i
+      break
+    }
+  }
+  const textOwn = pageText.ocrRunsFrom ?? pageText.runs.length
+  return layerOwn === textOwn ? spans : null
 }
 
 /** One character range's rects, measured against spans the caller already
@@ -173,7 +377,7 @@ function rectsFromSpans(
     if (first === -1 && match.start < runEnd) first = i
     if (match.end > runs[i].start) last = i
   }
-  if (first === -1 || last < first) return null
+  if (first === -1 || last < first || last >= spans.length) return null
   const startNode = spans[first].firstChild
   const endNode = spans[last].firstChild
   if (!startNode || !endNode) return null

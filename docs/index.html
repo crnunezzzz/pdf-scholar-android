@@ -20,7 +20,7 @@
       the Homebrew line live, resolved from the same API call. Linux stays
       there too, labelled beta; the extension keeps its one footer line.
       Promoting a platform out of beta is a deliberate edit, not upkeep
-      (macOS graduated 2026-08-11).
+      (macOS graduated 2026-08-11, the extension 2026-10-24).
 
   Colours are the app's own tokens from src/renderer/src/styles/app.css —
   the Day palette, with the Night palette under prefers-color-scheme: dark.
@@ -304,7 +304,7 @@
       <h2>Undistracted reading</h2>
       <p>
         The frame above is one window shown in three of the four reading modes — Day,
-        Tint (a light paper tone: the classic Sepia cream, or gray, green, blue or sand)
+        Tint (a light paper tone: the classic Sepia cream, or gray, green, blue, sand or a colour of your own)
         and two dark modes, the second with higher contrast — plus Auto, which follows
         the system. Night has its own dark tones — or «White», the document as printed
         inside the dark chrome — and can keep pictures in their original colours; a slider
@@ -327,13 +327,15 @@
       <p>
         Rest the pointer on a citation, a figure, a table or an equation reference and a
         preview of what it points to opens beside the text, without moving the page. A
-        citation shows its reference entry, and only that; a citation written as a range
-        («5–9») shows every entry in it. A figure, a table or an equation gets a window
+        citation shows its reference as text, the way Zotero's reader does — selectable,
+        its DOI and web links live — and a bracketed citation like «[3, 5–9]» lists every
+        reference in it, whichever of its numbers the pointer rests on, each with «Go to»
+        for its place in the list. A figure, a table or an equation gets a window
         onto its page: scroll it, Ctrl+wheel to rescale it, drag the corner to make it
         bigger. Click inside to go there, Ctrl+click to open it in the other column.
       </p>
       <ul class="points">
-        <li>On a citation, one click fetches the cited paper's abstract from free scholarly databases (arXiv, Europe PMC, Crossref, OpenAlex) — no key, no account, and only on that click. In the reference list itself, select an entry and choose “Abstract”.</li>
+        <li>On a citation, one click fetches the cited paper's abstract from free scholarly databases (arXiv, Europe PMC, Crossref, OpenAlex) — no key, no account, and only on that click; each reference in a bracket has its own. In the reference list itself, select an entry and choose “Abstract”.</li>
         <li>Roughly two in three citations find an abstract; books, working papers and some paywalled journals often do not.</li>
         <li>“Preview links” in the settings menu turns the previews off, or sets how long the pointer rests before one opens.</li>
       </ul>
@@ -395,6 +397,22 @@
 
   <section class="feature">
     <div class="body">
+      <h2>Scanned pages have text</h2>
+      <p>
+        A page that is only a picture of text — a scan, a reprint, a photocopied chapter —
+        is read by text recognition on your own computer. From then on its words can be
+        found, selected, copied, marked and asked about like any other page's.
+      </p>
+      <ul class="points">
+        <li>The pages on screen are read first; a search reads the rest and shows the hits as they come.</li>
+        <li>Nothing is sent anywhere for this, and nothing is written into the file. The read is not perfect: now and then two short words come out joined.</li>
+      </ul>
+    </div>
+    <img class="shot" src="screenshots/search_scan.png" alt="Search in a scanned document: the pages read on this computer, every hit marked on the scan.">
+  </section>
+
+  <section class="feature">
+    <div class="body">
       <h2>An assistant that cites its sources</h2>
       <p>
         Optional, and it runs on your own API key — or on your ChatGPT plan. Each claim carries a reference, and
@@ -404,12 +422,32 @@
         <li>Structured article summaries: research question, method, data, findings, limitations.</li>
         <li>A figure or table can be cropped into the chat and asked about.</li>
         <li>Questions about your own annotations — <i>“summarize what I've highlighted”</i>.</li>
+        <li>A scanned document is read the same way: the assistant gets the text recognised on your computer, with clickable citations, instead of only pages attached as images.</li>
+        <li>Conversations are kept with their document and listed across documents in the library, searchable; an earlier conversation — about this paper or another — can be attached to a new question as context.</li>
+        <li>One paperclip in the composer attaches context to a question: an earlier conversation, an image, or a local file — a PDF or a text file — whose text goes along as notes beside the document, which stays the only source the assistant cites.</li>
         <li>The assistant can open in its own window, so the document keeps the whole screen; a citation click still goes to the passage in the window showing the document.</li>
         <li>Providers: OpenAI, Claude (Anthropic), Google Gemini, Azure OpenAI, OpenRouter, Grok (xAI), Mistral and Groq, one key field each — or any OpenAI-compatible endpoint and local models via Ollama or LM Studio, with no key. Each answer reports the provider's token count.</li>
-        <li>In the desktop app, sign in with ChatGPT Plus or Pro and use the plan's allowance instead of an API key — an unofficial route OpenAI allows today, under ChatGPT's terms.</li>
+        <li>Sign in with ChatGPT Plus or Pro in the desktop app and use the plan's allowance instead of an API key — the browser extension uses that sign-in too when the app is installed. An unofficial route OpenAI allows today, under ChatGPT's terms.</li>
       </ul>
     </div>
     <img class="shot" src="screenshots/assistant.png" alt="The assistant's answer beside the document, with the cited sentence highlighted on the page after clicking its chip.">
+  </section>
+
+  <section class="feature">
+    <div class="body">
+      <h2>Your notes in Claude, Codex and other AI tools</h2>
+      <p>
+        The desktop app can let an AI tool on your computer search what you noted across
+        every paper: highlights with the words they mark, comments, and your assistant
+        conversations. Ask it while you write and it looks the notes up, without opening a PDF.
+      </p>
+      <ul class="points">
+        <li><b>Nothing to download.</b> The MCP server is part of the app. Claude and Codex are one switch each, under “AI tools” in the settings menu.</li>
+        <li>Other tools that support MCP take one config entry, which the app copies for you with your paths filled in. <a href="https://github.com/emilmsh/pdf-scholar/blob/master/docs/MCP.md">How to set it up</a>.</li>
+        <li>For a tool that cannot connect, “Copy for AI” copies one document's notes and conversations as text to paste. This also works in the browser extension.</li>
+        <li>Off until you turn a tool on, and the same switch takes it back. Each document has its own switch and a whole folder can be kept out, and a tool never sees the PDFs, images, file paths or anything from a password-protected document.</li>
+      </ul>
+    </div>
   </section>
 
   <section class="feature">
@@ -443,7 +481,9 @@
       An AI action sends document content — normally the whole text, an excerpt for very
       long documents — and some actions fire on one click. An AI access switch in
       settings can ask before a document is first shared with a provider — naming the
-      model and what is about to be attached — or block AI requests entirely.
+      model and what is about to be attached — or block AI requests entirely. An AI tool
+      you turn on reads your notes and conversations, and what it reads goes to that
+      tool's provider; its own switch takes that back.
     </p>
   </div>
 
@@ -480,7 +520,7 @@
       It is built from the same sources but has never been run on a Linux machine —
       I develop on Windows and have none to test on — so
       <a href="https://github.com/emilmsh/pdf-scholar/issues">a report</a> naming your
-      distro and what worked is genuinely useful.
+      distro and what worked is useful.
     </p>
   </div>
 
@@ -489,10 +529,9 @@
 <footer>
   <div class="inner">
     <p>
-      <b>A browser extension</b> that puts the same reader inside your browser is in
-      beta, on
+      <b>A browser extension</b> puts the same reader inside Edge or Chrome:
       <a href="https://microsoftedge.microsoft.com/addons/detail/pdf-scholar/jdmemepojgjhflpeckiiciibnhmbdjcc">Edge
-      Add-ons</a> and the
+      Add-ons</a>,
       <a href="https://chromewebstore.google.com/detail/pdf-scholar/jhhlaaiegmdmjeeiopmdmoiidnbbhbmd">Chrome
       Web Store</a>.
       The macOS build and the Linux beta above are made in CI on every release; what

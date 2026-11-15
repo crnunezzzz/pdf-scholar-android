@@ -5,14 +5,22 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { TextContextMenu } from './components/TextContextMenu'
 import { parseAssistantTarget } from '../../shared/viewer-url'
 import { initTouchUi } from './touch-ui'
-import { isAndroid } from './bridge'
+import { isAndroid, bridge } from './bridge'
 import { installPdfFallbackFonts } from './pdf-fonts'
+import { installOcr } from './ocr'
+import { setSystemLanguages } from './i18n'
 import './styles/app.css'
 // pdf.js's own stylesheet for the XFA form layer (Apache-2.0, see the file)
 import './styles/xfa-layer.css'
 
 // Finger-sized targets follow the input in use (html.touch-ui) — see touch-ui.ts
 initTouchUi()
+
+// Scanned pages get their text from OCR, on this machine (ocr.ts)
+installOcr()
+
+// The OS's language list, for the AI's default answer language (i18n.ts)
+bridge.systemLanguages().then(setSystemLanguages, () => {})
 
 // The renderer fires and forgets a lot of async work (saves, engine writes, AI
 // calls). Each site that can meaningfully recover handles its own failure, but

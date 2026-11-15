@@ -42,7 +42,7 @@ Free and open source (MIT). No account, no sign-in, no tracking, no ads. Nothing
 
 READING
 • Smooth scrolling; zoom centres on the cursor or pinch point; fit width or page
-• Four reading modes — Day, Tint (a light paper tone: sepia, gray, green, blue or sand), Night and Night+ — plus Auto; Night has its own dark tones or shows the document as printed inside the dark chrome, a slider sets the strength, and Night can keep pictures in their original colours
+• Four reading modes — Day, Tint (a light paper tone: sepia, gray, green, blue, sand or your own colour), Night and Night+ — plus Auto; Night has its own dark tones or shows the document as printed inside the dark chrome, a slider sets the strength, and Night can keep pictures in their original colours
 • Page rotation, two-page spread, page by page (one page or spread at a time, turned instead of scrolled), and a full-screen presentation mode
 • Table of contents, thumbnails and bookmarks
 • Rest the pointer on a citation, a figure or an equation to preview it beside the text; on a citation, one click fetches the cited paper's abstract from free scholarly databases (arXiv, Europe PMC, Crossref, OpenAlex)
@@ -77,12 +77,15 @@ SEARCH
 Both modes live in one search bar, a tab apart.
 • By words: match case, whole word, a results list with excerpts that folds away so it never covers the hit, and every match marked on the page
 • By meaning: describe a topic in your own words and get the passages that discuss it, ranked (uses the assistant's key)
+• Scanned pages are searched too: a page that is only a picture of text is read by text recognition on your own computer, and its words can then be found, selected, marked and asked about like any other page's. Nothing is sent anywhere for this, and nothing is written into the file
 
 AI ASSISTANT (optional — bring your own key)
 • Answers cite their sources: each claim links to the passage it came from
 • Structured article summaries; explain, simplify, critique or define selected text
 • A figure or region can be cropped into the chat and asked about
-• Scanned documents are identified as such; a page range can be attached as images for the assistant to read
+• A scanned document is read the same way: the assistant gets the text recognised on your computer, with clickable citations, instead of only pages attached as images
+• Conversations are kept with their document and listed across documents in the library, searchable; an earlier conversation, about this paper or another, can be attached to a new question as context
+• A paperclip in the composer attaches an earlier conversation, an image or a local file (a PDF or a text file) as context; the open document stays the only source the assistant cites
 • The assistant can open in its own window; a citation click still goes to the passage in the document's window
 • LaTeX in answers is rendered; optional web search, off by default
 • AI access switch: "Confirm before sharing" asks the first time a document goes to a provider and shows what is attached; "Off" blocks every AI request
@@ -99,7 +102,7 @@ Gratis og åpen kildekode (MIT). Ingen konto, ingen innlogging, ingen sporing, i
 
 LESING
 • Jevn rulling; zoom sentreres om pekeren eller knipepunktet; tilpass bredde eller side
-• Fire lesemoduser — Dag, Farge (en lys papirtone: sepia, grå, grønn, blå eller sand), Natt og Natt+ — pluss Auto; natt har egne mørke toner eller viser dokumentet som trykt i den mørke rammen, en glidebryter setter styrken, og natt kan beholde bildenes originalfarger
+• Fire lesemoduser — Dag, Farge (en lys papirtone: sepia, grå, grønn, blå, sand eller din egen farge), Natt og Natt+ — pluss Auto; natt har egne mørke toner eller viser dokumentet som trykt i den mørke rammen, en glidebryter setter styrken, og natt kan beholde bildenes originalfarger
 • Siderotasjon, tosiders oppslag, side for side (én side eller ett oppslag om gangen, bladd i stedet for rullet) og fullskjerms presentasjonsmodus
 • Innholdsfortegnelse, miniatyrer og bokmerker
 • Hold pekeren over en henvisning, en figur eller en ligning for å forhåndsvise den ved siden av teksten; på en henvisning henter ett klikk sammendraget til den siterte artikkelen fra åpne fagdatabaser (arXiv, Europe PMC, Crossref, OpenAlex)
@@ -134,12 +137,15 @@ SØK
 Begge modusene bor i én søkelinje, en fane fra hverandre.
 • Etter ord: skill store/små, helord, en treffliste med utdrag som kan slås sammen så den aldri dekker treffet, og hvert treff markert på siden
 • Etter mening: beskriv et tema med egne ord og få avsnittene som omtaler det, rangert (bruker assistentens nøkkel)
+• Skannede sider søkes også: en side som bare er et bilde av tekst, leses av tekstgjenkjenning på din egen maskin, og ordene kan deretter finnes, merkes og spørres om som på enhver annen side. Ingenting sendes noe sted for dette, og ingenting skrives inn i filen
 
-AI-ASSISTENT (valgfri — egen nøkkel)
+AI-ASSISTENT (valgfri – egen nøkkel)
 • Svarene viser kildene sine: hver påstand lenker til avsnittet den kom fra
 • Strukturerte artikkelsammendrag; forklar, forenkle, kritiser eller definer merket tekst
 • En figur eller et område kan klippes inn i samtalen og spørres om
-• Skannede dokumenter identifiseres som det; et sideutvalg kan legges ved som bilder som assistenten leser
+• Et skannet dokument leses på samme måte: assistenten får teksten som er gjenkjent på maskinen din, med klikkbare kildehenvisninger, i stedet for bare sider lagt ved som bilder
+• Samtaler beholdes sammen med dokumentet og listes på tvers av dokumenter i biblioteket, søkbare; en tidligere samtale, om denne artikkelen eller en annen, kan legges ved et nytt spørsmål som kontekst
+• En binders i skrivefeltet legger ved en tidligere samtale, et bilde eller en lokal fil (en PDF eller en tekstfil) som kontekst; det åpne dokumentet er fortsatt den eneste kilden assistenten oppgir
 • Assistenten kan åpnes i eget vindu; et sitatklikk går fortsatt til avsnittet i dokumentvinduet
 • LaTeX i svar gjengis; valgfritt nettsøk, av som standard
 • AI-tilgang: «Bekreft før deling» spør første gang et dokument sendes til en leverandør og viser hva som legges ved; «Av» stopper alle AI-forespørsler
@@ -150,28 +156,43 @@ Kildekode: https://github.com/emilmsh/pdf-scholar
 
 ---
 
-## What's new in this version (≤ 1 500 chars) — v0.61.0
+## What's new in this version (≤ 1 500 chars) — v0.84.0
+
+*(The Store last carried v0.73.0's notes, so this covers v0.74.0–v0.84.0:
+the headline items, not every release. MCP for outside AI tools is left out
+on purpose — the Store build cannot connect, PLATFORMS §33 — and «Copy for
+AI», which works everywhere, stands in for it.)*
 
 **EN:**
 ```
-• A document that changes on disk — a LaTeX build, a sync client, another program's save — is reloaded in place; with unsaved marks you are offered the reload instead
-• The interface in Simplified Chinese
-• Link previews read the page at a scale of their own, scroll both ways and zoom with Ctrl+wheel; a citation like «5–9» shows every entry in the range; math in abstracts is rendered
-• Search finds a phrase across a line break
-• «Create bookmark» in the selection menu names the bookmark after the selected text
-• A note you have typed into is saved when you leave it, like a comment on a highlight
-• The AI settings name «Other OpenAI-compatible endpoint» as its own choice, and the quick-answer bubble grows with its window
+• Paper tints of your own: a «+» under the tones in Tint and Night takes any colour off the wheel, held readable
+• The assistant answers in the language you write in, whatever language the document or the interface is in
+• Many documents open: the tab strip scrolls instead of squeezing, «All open tabs» searches them, and Ctrl+1–9 jumps between them
+• Tab groups: put tabs in a group from the right-click menu and fold it out of the strip while you work on something else
+• Text boxes start where you click, grow as you type, and can be moved by their grip while you write
+• «Copy for AI» in the Annotations tab puts a paper's notes and assistant conversations on the clipboard, for use in another AI tool
+• Hovering a note or a comment shows the whole text, and the comment bubble opens at the height of its text
+• Margin view: «m» shows the comments in the margin; comments taller than their page run over its edge instead of overlapping
+• Reading font: choose any font your computer has for answers, comments and notes – nothing is written into the file
+• Link preview: a footnote is found by its marker even where the link points elsewhere on the page
+• Model menu: type a model's id to use one that is newer than the list
+• A middle click closes a tab
 ```
 
 **NO:**
 ```
-• Et dokument som endres på disk – en LaTeX-bygging, en synkklient, et annet programs lagring – lastes inn på nytt på stedet; med ulagrede merker får du tilbud om det i stedet
-• Grensesnittet på forenklet kinesisk
-• Lenkeforhåndsvisningen leser siden i sin egen skala, ruller begge veier og zoomer med Ctrl+hjul; en henvisning som «5–9» viser alle oppføringene; matematikk i sammendrag gjengis
-• Søk finner en frase over et linjeskift
-• «Lag bokmerke» i markeringsmenyen gir bokmerket navn etter den markerte teksten
-• Et notat du har skrevet i, lagres når du forlater det, som en kommentar på en markering
-• KI-innstillingene har «Annet OpenAI-kompatibelt endepunkt» som eget valg, og hurtigsvar-boblen vokser med vinduet sitt
+• Egne papirtoner: en «+» under tonene i Farge og Natt tar enhver farge fra hjulet, holdt lesbar
+• Assistenten svarer på språket du skriver på, uansett hvilket språk dokumentet eller grensesnittet har
+• Mange dokumenter åpne: fanelisten ruller i stedet for å klemmes, «Alle åpne faner» søker i dem, og Ctrl+1–9 hopper mellom dem
+• Fanegrupper: legg faner i en gruppe fra høyreklikkmenyen, og fold den ut av listen mens du jobber med noe annet
+• Tekstbokser begynner der du klikker, vokser mens du skriver, og kan flyttes i gripet underveis
+• «Kopier for KI» i Merknader-fanen legger notatene og assistentsamtalene til et dokument på utklippstavlen, til bruk i et annet KI-verktøy
+• Hold pekeren over et notat eller en kommentar, og hele teksten vises; kommentarboblen åpnes i tekstens høyde
+• Margvisning: «m» viser kommentarene i margen; kommentarer som er høyere enn siden, henger ut over kanten i stedet for å overlappe
+• Leseskrift: velg hvilken som helst skrift maskinen har, til svar, kommentarer og notater – ingenting skrives inn i filen
+• Lenkeforhåndsvisning: en fotnote finnes på merket sitt også der lenken peker et annet sted på siden
+• Modellmenyen: skriv inn ID-en til en modell for å bruke en som er nyere enn listen
+• Et klikk med midtknappen lukker en fane
 ```
 
 ---

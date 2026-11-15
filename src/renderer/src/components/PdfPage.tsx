@@ -3,7 +3,7 @@ import { AnnotationMode, OPS, TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import type { PageRect, ViewRotation } from '../../../shared/types'
 import type { DrawTool, PageAnnotation, ResizeHandle, ShapeToolType } from '../annotations'
-import { annotationCss, arrowHeadPoints, arrowShaftEnd, isTextMarkup, quadsUnion, resizeKindOf, rgbCss, squigglyPathData, strokePathData, textFontCss } from '../annotations'
+import { annotationCss, arrowHeadPoints, arrowShaftEnd, isTextMarkup, quadsUnion, resizeKindOf, rgbCss, squigglyPathData, strokePathData, freetextLineCss, textFontCss } from '../annotations'
 import { pagePointToView, pageRectToView, svgRotationTransform, viewSize } from '../rotation'
 import { pageImageRects } from '../image-regions'
 import type { OpsTable } from '../image-regions'
@@ -12,6 +12,7 @@ import { PDFIUM_RENDER, renderPdfiumPage } from '../pdfium-renderer'
 import { t } from '../i18n'
 import { penNear } from '../pen-input'
 import { cleanAttachmentName } from '../../../shared/attachments'
+import { selectFromLink } from '../link-drag-select'
 import { NOTE_ICON_BOX, NOTE_ICON_SVG } from '../../../shared/note-icon'
 import type { DocAttachment } from '../attachments'
 import {
@@ -27,10 +28,19 @@ import { isXfaDocument, renderXfaLayer } from '../xfa'
 import type { XfaLayerHandle } from '../xfa'
 import { LINK_RECORDS } from '../link-preview'
 import { carrySelection } from '../selection-carry'
+import { OCR_PRIORITY, imageTextRead, ocrImageContent, ocrTextContent, useOcrAllowed } from '../ocr'
+import { mergeImageText } from '../ocr-image'
+import { isVisibleText } from '../ocr-text'
+import { dedupeTextContent } from '../search'
+import type { TextContent } from 'pdfjs-dist/types/src/display/api'
 
 /** Tooltip for an in-document link — names the Ctrl/Cmd shortcut, which is the
  *  only place that gesture is advertised. */
 const linkTitle = (): string => t('viewer.linkTip')
+
+/** How long a page with text must stay mounted before the words in its
+ *  images are asked for (ocr.ts reads them in a worker either way) */
+const IMAGE_TEXT_DELAY_MS = 400
 
 const SHAPE_TYPES = new Set(['square', 'circle', 'line', 'arrow'])
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -216,6 +226,9 @@ function PdfPage({
   // text-layer effect read the live scale/rotation without taking `scale` as a
   // dependency (which would defeat the whole point — a full rebuild per zoom).
   const textLayerRef = useRef<InstanceType<typeof TextLayer> | null>(null)
+  // OCR on request: when the reader asks for this document, the effect below
+  // runs again and reads the page it left empty
+  const ocrAllowed = useOcrAllowed(pdf)
   const pageRef = useRef<PDFPageProxy | null>(null)
   // An XFA form (xfa.ts): the page is pdf.js's HTML layout of the form, mounted
   // in .xfa-host where a normal page has its text layer. The canvas still
@@ -294,7 +307,7 @@ function PdfPage({
   // ---- Canvas raster ----
   // Re-runs on zoom because a crisp bitmap must be rasterised at the new scale.
   // Deliberately separate from the text/link layers below: a zoom re-rasters
-  // only this canvas and must NOT rebuild the text layer (streamTextContent +
+  // only this canvas and must NOT rebuild the text layer (getTextContent +
   // a DOM node per span) or re-fetch link annotations — those are scale-free.
   useEffect(() => {
     const host = hostRef.current
@@ -338,8 +351,18 @@ function PdfPage({
       // Render off-DOM so the previous bitmap stays visible until the caller
       // blits (show) or parks (speculative) the finished one — no flash.
       const canvas = document.createElement('canvas')
-      canvas.width = Math.floor(viewport.width * dpr)
-      canvas.height = Math.floor(viewport.height * dpr)
+      // Sized from the page's CSS box, which the layout snapped to whole
+      // device pixels (rotation.ts, issue #53): at the display's density the
+      // bitmap then maps 1:1 onto the screen and no glyph is resampled.
+      // viewport.width is the unsnapped pageW × scale, a hair off the box —
+      // the render transform below maps it onto the bitmap exactly, so the
+      // page is drawn a few parts in ten thousand off `scale`, never blurred.
+      // (floor(viewport × dpr) stretched over a fractional box was the whole
+      // «fuzzy at most zoom levels» report.)
+      canvas.width = Math.max(1, Math.round(cssWidth * dpr))
+      canvas.height = Math.max(1, Math.round(cssHeight * dpr))
+      const sx = canvas.width / viewport.width
+      const sy = canvas.height / viewport.height
       // Time the raster so the controller learns this machine's throughput.
       // Only feed back clean, completed samples (pixels = 0 skips the sample).
       beginRender()
@@ -369,7 +392,7 @@ function PdfPage({
           const task = page.render({
             canvas,
             viewport,
-            transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+            transform: [sx, 0, 0, sy, 0, 0],
             annotationMode: hideAnnots ? AnnotationMode.DISABLE : AnnotationMode.ENABLE
           })
           renderTask = task
@@ -555,7 +578,9 @@ function PdfPage({
       window.clearTimeout(settleTimer)
       renderTask?.cancel()
     }
-  }, [pdf, docKey, pageNumber, scale, rotation, active, hideAnnots, keepImageColors])
+    // cssWidth/cssHeight: the box the bitmap is sized from — it moves without
+    // `scale` when the window lands on a monitor of another pixel ratio
+  }, [pdf, docKey, pageNumber, scale, rotation, active, hideAnnots, keepImageColors, cssWidth, cssHeight])
 
   // ---- Text layer + clickable links ----
   // Built ONCE per page/rotation, NOT per zoom. pdf.js v6 lays spans out in
@@ -580,6 +605,8 @@ function PdfPage({
 
     let cancelled = false
     let textLayer: Cancellable | null = null
+    // A page scrolled away before its OCR started leaves the queue (ocr.ts)
+    const ocrAbort = new AbortController()
 
     ;(async () => {
       const page = await pdf.getPage(pageNumber)
@@ -607,52 +634,107 @@ function PdfPage({
         return
       }
 
-      const textDiv = document.createElement('div')
-      textDiv.className = 'textLayer'
-      const tl = new TextLayer({
-        textContentSource: page.streamTextContent(),
-        container: textDiv,
-        viewport
-      })
-      textLayer = tl
-      await tl.render()
+      /** Build the layer from one source and put it in place of the old one.
+       *  Null when the effect was torn down meanwhile. */
+      const buildTextLayer = async (
+        source: TextContent,
+        /** Spans from this one on are words OCR read in the page's images */
+        imageSpansFrom?: number
+      ): Promise<TextLayer | null> => {
+        const textDiv = document.createElement('div')
+        textDiv.className = 'textLayer'
+        // At the scale of the moment: an OCR'd layer arrives seconds after
+        // the first build, often at another zoom
+        const tl = new TextLayer({
+          textContentSource: source,
+          container: textDiv,
+          viewport: page.getViewport({ scale: scaleRef.current, rotation: viewport.rotation })
+        })
+        textLayer = tl
+        await tl.render()
+        if (cancelled) return null
+        textLayerRef.current = tl
+        // Whitespace-only items (LaTeX PDFs often park them in the margins,
+        // one per line) must not paint their own selection box — they stay
+        // in the DOM so copied text keeps its spaces, but render no highlight.
+        // trim() misses zero-width/invisible characters (U+200B, soft
+        // hyphens, BOM…) that HTML-to-PDF generators love to emit
+        for (const span of textDiv.querySelectorAll('span')) {
+          if (!isVisibleText(span.textContent ?? '')) span.classList.add('ws-only')
+        }
+        const endOfContent = document.createElement('div')
+        endOfContent.className = 'endOfContent'
+        textDiv.append(endOfContent)
+        // pdf.js's selection trick: while the mouse is down, .endOfContent
+        // expands to cover the page (CSS .selecting) so a drag that starts
+        // in the empty space between lines anchors there instead of
+        // selecting the entire page
+        textDiv.addEventListener('mousedown', () => {
+          textDiv.classList.add('selecting')
+          window.addEventListener('mouseup', () => textDiv.classList.remove('selecting'), {
+            once: true
+          })
+        })
+        // A re-read of the same document (a write elsewhere) rebuilds this layer
+        // under whatever the reader has selected — carry the selection over, and
+        // a drag still in progress keeps its page-covering .endOfContent
+        const oldDiv = textHost.firstElementChild
+        const restoreSelection = carrySelection(oldDiv, textDiv)
+        if (oldDiv?.classList.contains('selecting')) {
+          textDiv.classList.add('selecting')
+          window.addEventListener('mouseup', () => textDiv.classList.remove('selecting'), {
+            once: true
+          })
+        }
+        // search.ts tells the images' words from the page's own by this mark
+        // (the text it measures against may not have them yet, or the other
+        // way round — the own words are a prefix of both)
+        if (imageSpansFrom !== undefined) {
+          textDiv.querySelectorAll<HTMLElement>(':scope > span').forEach((span, i) => {
+            if (i >= imageSpansFrom) span.dataset.ocr = 'image'
+          })
+        }
+        textHost.replaceChildren(textDiv)
+        restoreSelection?.()
+        return tl
+      }
+
+      // The page's own text, read once for the layer and for the words in its
+      // images below. Through dedupeTextContent, like search.ts reads it: a
+      // publisher PDF that draws every line twice (outline, then fill) must
+      // give the layer ONE span per text, or a search's runs and the spans
+      // would not correspond — and a copied word would come out doubled.
+      const own = dedupeTextContent(await page.getTextContent())
       if (cancelled) return
-      textLayerRef.current = tl
-      // Whitespace-only items (LaTeX PDFs often park them in the margins,
-      // one per line) must not paint their own selection box — they stay
-      // in the DOM so copied text keeps its spaces, but render no highlight.
-      // trim() misses zero-width/invisible characters (U+200B, soft
-      // hyphens, BOM…) that HTML-to-PDF generators love to emit
-      for (const span of textDiv.querySelectorAll('span')) {
-        const visible = (span.textContent ?? '').replace(/[\s\u00AD\u200B-\u200F\u2060\uFEFF]/gu, '')
-        if (!visible) span.classList.add('ws-only')
+      const tl = await buildTextLayer(own)
+      if (!tl) return
+      // A scanned page has no words of its own: OCR reads it (ocr.ts) and its
+      // words take the empty layer's place. The links below do not wait —
+      // reading a page takes a second or two. The same recognised words feed
+      // search and the assistant (search.ts pageTextContent), so the spans
+      // and the extracted runs still correspond 1:1.
+      if (!tl.textContentItemsStr.some(isVisibleText)) {
+        void ocrTextContent(pdf, pageNumber, { priority: OCR_PRIORITY.visible, signal: ocrAbort.signal })
+          .then((content) => (content && content.items.length > 0 && !cancelled ? buildTextLayer(content) : null))
+          .catch(() => {})
+      } else if (!xfa) {
+        // A page with text of its own: the words in its images (a figure, a
+        // pasted-in table) join after it, once read. Not at once — a page the
+        // reader flicks past is not worth its pictures' reading. Words read
+        // already (a search went through them) are added at once.
+        window.setTimeout(() => {
+          if (cancelled) return
+          void (async () => {
+            const images = await ocrImageContent(pdf, pageNumber, own, {
+              priority: OCR_PRIORITY.visible,
+              signal: ocrAbort.signal
+            })
+            if (!images || images.items.length === 0 || cancelled) return
+            const ownSpans = own.items.filter((i) => 'str' in i && i.str !== '').length
+            await buildTextLayer(mergeImageText(own, images), ownSpans)
+          })().catch(() => {})
+        }, imageTextRead(pdf, pageNumber) ? 0 : IMAGE_TEXT_DELAY_MS)
       }
-      const endOfContent = document.createElement('div')
-      endOfContent.className = 'endOfContent'
-      textDiv.append(endOfContent)
-      // pdf.js's selection trick: while the mouse is down, .endOfContent
-      // expands to cover the page (CSS .selecting) so a drag that starts
-      // in the empty space between lines anchors there instead of
-      // selecting the entire page
-      textDiv.addEventListener('mousedown', () => {
-        textDiv.classList.add('selecting')
-        window.addEventListener('mouseup', () => textDiv.classList.remove('selecting'), {
-          once: true
-        })
-      })
-      // A re-read of the same document (a write elsewhere) rebuilds this layer
-      // under whatever the reader has selected — carry the selection over, and
-      // a drag still in progress keeps its page-covering .endOfContent
-      const oldDiv = textHost.firstElementChild
-      const restoreSelection = carrySelection(oldDiv, textDiv)
-      if (oldDiv?.classList.contains('selecting')) {
-        textDiv.classList.add('selecting')
-        window.addEventListener('mouseup', () => textDiv.classList.remove('selecting'), {
-          once: true
-        })
-      }
-      textHost.replaceChildren(textDiv)
-      restoreSelection?.()
 
       // Clickable link annotations (internal destinations + external URLs).
       // Positioned as % of the page box so they reflow on zoom (no baked scale).
@@ -716,18 +798,24 @@ function PdfPage({
         anchor.style.top = `${(100 * Math.min(py1, py2)) / viewport.height}%`
         anchor.style.width = `${(100 * Math.abs(px2 - px1)) / viewport.width}%`
         anchor.style.height = `${(100 * Math.abs(py2 - py1)) / viewport.height}%`
-        if (link.url) anchor.title = link.url
-        else {
+        const draggedFromHere = selectFromLink(anchor, linkHost)
+        if (link.url) {
+          anchor.title = link.url
+          // What the point menu reads to offer «Kopier e-postadresse»
+          anchor.dataset.url = link.url
+        } else {
           anchor.title = linkTitle()
           // What the hover preview (LinkPreview) reads to show the target
           // without following it — the document rides along, since a split
           // column can show another file than the tab's
           anchor.classList.add('internal')
-          LINK_RECORDS.set(anchor, { pdf, dest: link.dest, rotation })
+          LINK_RECORDS.set(anchor, { pdf, dest: link.dest, rotation, follow: onInternalLink })
         }
         anchor.addEventListener('click', (e) => {
           e.preventDefault()
           e.stopPropagation()
+          // The release that ended a drag-selection is not a click on the link
+          if (draggedFromHere()) return
           // An EXTERNAL link always hands off to the system browser, modifier or
           // not: there is nothing in this document for a second column to show,
           // and the browser applies its own new-tab conventions from there.
@@ -748,9 +836,10 @@ function PdfPage({
 
     return () => {
       cancelled = true
+      ocrAbort.abort()
       textLayer?.cancel()
     }
-  }, [pdf, docKey, pageNumber, rotation, active, onInternalLink, onExternalLink, onFileAttachment, xfa])
+  }, [pdf, docKey, pageNumber, rotation, active, onInternalLink, onExternalLink, onFileAttachment, xfa, ocrAllowed])
 
   // ---- Zoom refinement for the text layer ----
   // The spans' horizontal glyph fit (--scale-x) is measured at build scale; on
@@ -1208,7 +1297,9 @@ function PdfPage({
           the teacher's fresh ones belong in the same column */}
       {marginView && !hideAnnots && (
         <MarginNotes
+          docKey={docKey}
           pageNumber={pageNumber}
+          pageTop={top}
           annotations={annotations}
           scale={scale}
           rotation={rotation}
@@ -1459,6 +1550,10 @@ function AnnotationMarks({
   }
   if (annotation.type === 'freetext') {
     const css = annotationCss(annotation, annotation.quads[0], scale, { w: pageW, h: pageH }, rotation)
+    const sizePx = (annotation.fontSize ?? 12) * scale
+    // …and on the lines the appearance stream sets them on (issue #66), so
+    // the words do not jump when the file takes over from this overlay
+    const lines = freetextLineCss(annotation.font, sizePx)
     return (
       <div
         className="annot annot-freetext"
@@ -1467,7 +1562,9 @@ function AnnotationMarks({
           // The face the appearance stream will be built in, so the overlay
           // and the saved page show the same letters at the same widths.
           ...textFontCss(annotation.font),
-          fontSize: (annotation.fontSize ?? 12) * scale
+          fontSize: sizePx,
+          lineHeight: `${lines.lineHeight}px`,
+          marginTop: lines.shift
         }}
       >
         {annotation.contents}

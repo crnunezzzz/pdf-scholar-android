@@ -17,6 +17,7 @@ import type {
   ZoteroErrorCode
 } from '../../shared/types'
 import type { FileIconErrorCode } from '../../shared/file-icon'
+import type { McpErrorCode } from '../../shared/mcp'
 
 export type Lang = 'nb' | 'en' | 'zh'
 /** User's choice — 'auto' follows the OS/browser language */
@@ -42,6 +43,7 @@ const nb = {
   'app.reloadFromDisk': 'Last inn på nytt …',
   'app.keepMine': 'Behold min versjon',
   'app.reloadedFromDisk': '«{name}» ble endret på disk og er lastet inn på nytt',
+  'app.identityRebound': 'Gjenkjent fra «{from}» – samtaler, bokmerker og leseposisjon er tatt med',
   // Shown by the render-error boundary — the only screen a user sees when the
   // UI itself failed, so it has to say what to do next.
   'crash.title': 'Noe gikk galt',
@@ -121,6 +123,14 @@ const nb = {
   'aierr.ai-disabled':
     'KI-funksjonene er slått av i KI-innstillingene, så ingen forespørsel ble sendt.',
   'aierr.ai-chatgpt-signed-out': 'Du er ikke logget inn med ChatGPT. Logg inn i KI-innstillingene.',
+  'aierr.ai-chatgpt-desktop-signed-out':
+    'PDF Scholar for skrivebordet er ikke logget inn med ChatGPT. Logg inn i appens KI-innstillinger, så virker det her også.',
+  'aierr.ai-chatgpt-host-missing':
+    'Fant ikke PDF Scholar for skrivebordet på denne maskinen. Installer appen (ikke Microsoft Store-utgaven) og start den én gang.',
+  'aierr.ai-chatgpt-host-outdated': 'Skrivebordsappen og utvidelsen har ulike versjoner. Oppdater begge.',
+  'aierr.ai-chatgpt-host-failed': 'PDF Scholar for skrivebordet startet, men svarte ikke.',
+  'aierr.ai-chatgpt-host-denied':
+    'Nettleseren fikk ikke lov til å starte PDF Scholar for skrivebordet, så innloggingen kan ikke lånes.',
   'aierr.ai-chatgpt-session-expired':
     'ChatGPT-innloggingen er utløpt eller trukket tilbake. Logg inn på nytt i KI-innstillingene.',
   'aierr.ai-subscription-limit':
@@ -196,6 +206,7 @@ const nb = {
   'welcome.recentsList': 'Vis som liste',
   'welcome.recentsGrid': 'Vis forsidene',
   'welcome.recentsProgress': 's. {page} av {pages}',
+  'tabs.cardPage': 's. {page}',
   'welcome.recentsPinned': 'Festet',
   'welcome.recentsPin': 'Fest øverst',
   'welcome.recentsUnpin': 'Løsne',
@@ -213,14 +224,14 @@ const nb = {
   'tabs.pin': 'Fest fanen',
   'tabs.unpin': 'Løsne fanen',
   'tabs.closeOthers': 'Lukk andre faner',
-  'tabs.closeToRight': 'Lukk faner til høyre',
-  'tabs.moveLeft': 'Flytt til venstre',
-  'tabs.moveRight': 'Flytt til høyre',
   'tabs.new': 'Åpne PDF',
   'tabs.newWindow': 'Nytt vindu',
   'tabs.allTip': 'Alle åpne faner',
-  'tabs.allLabel': 'Åpne faner',
+  'tabs.searchPlaceholder': 'Søk i faner',
+  'tabs.searchEmpty': 'Ingen faner passer',
+  'doc.pathCopied': 'Stien er kopiert',
   'tabs.openInNewWindow': 'Åpne i nytt vindu',
+  'tabs.duplicate': 'Dupliser fane',
   'tabs.openInSplit': 'Åpne i delt visning',
   'tb.swapPanesTip': 'Bytt plass på kolonnene',
   'tb.splitOtherFile': 'Annen fil …',
@@ -247,6 +258,28 @@ const nb = {
   'tabs.reload': 'Last inn på nytt',
   'tabs.moveToNewWindow': 'Flytt til nytt vindu',
   'tabs.showInFolder': 'Vis i Filutforsker',
+  // Tab groups (src/shared/tab-groups.ts)
+  'tabs.groupNew': 'Legg i ny gruppe',
+  'tabs.groupAddTo': 'Legg i «{name}»',
+  'tabs.groupAddToUnnamed': 'Legg i gruppe uten navn',
+  'tabs.groupRemove': 'Fjern fra gruppen',
+  'tabs.groupNewMany': 'Legg {n} faner i ny gruppe',
+  'tabs.groupAddToMany': 'Legg {n} faner i «{name}»',
+  'tabs.groupAddToUnnamedMany': 'Legg {n} faner i gruppe uten navn',
+  'tabs.groupRemoveMany': 'Fjern {n} faner fra gruppene',
+  'tabs.closeMany': 'Lukk {n} faner',
+  'tabs.groupNamePlaceholder': 'Navngi gruppen',
+  'tabs.groupCollapse': 'Fold sammen',
+  'tabs.groupExpand': 'Fold ut',
+  'tabs.groupUngroup': 'Del opp gruppen',
+  'tabs.groupClose': 'Lukk gruppen',
+  'tabs.groupChipTip': '{n} faner – klikk for å folde sammen eller ut, høyreklikk for navn og farge',
+  'tabs.groupColor.blue': 'Blå',
+  'tabs.groupColor.green': 'Grønn',
+  'tabs.groupColor.yellow': 'Gul',
+  'tabs.groupColor.red': 'Rød',
+  'tabs.groupColor.purple': 'Lilla',
+  'tabs.groupColor.grey': 'Grå',
 
   // Toolbar
   'tb.library': 'Bibliotek',
@@ -270,6 +303,9 @@ const nb = {
   'tb.markupTip': 'Marker tekst – dra over tekst for å utheve (Esc avslutter)',
   'tb.markupOptionsTip': 'Velg type og farge',
   'tb.eraserTip': 'Viskelær – sletter penn, tusj og former (Esc avslutter)',
+  'tb.handTip': 'Håndverktøy – dra for å flytte siden (Esc avslutter)',
+  'tb.spaceHand': 'Space holder hånden',
+  'tb.spaceHandTip': 'Hold Space inne for å dra siden – slipp, og verktøyet du hadde er tilbake',
   'tb.eraserAllTip': 'Viskelær – sletter alle merknader (Esc avslutter)',
   'tb.eraserOptionsTip': 'Velg hva viskelæret sletter',
   'tb.eraserScopeDraw': 'Tegnede merker',
@@ -293,8 +329,11 @@ const nb = {
   'tb.textTip': 'Tekst på siden – klikk der teksten skal stå (Esc avslutter)',
   'tb.textOptionsTip': 'Tekstfarge og størrelse',
   'tb.fontSize': 'Størrelse',
-  'tb.textMoveHint': 'Tekstboksen kan flyttes og skaleres etterpå – klikk den for å få håndtak',
-  'text.hint': 'Klikk der teksten skal stå · Boksen kan flyttes og skaleres etterpå · Esc avbryter',
+  'tb.textMoveHint': 'Dra i prikkene for å flytte boksen mens du skriver, i hjørnet for å skalere – senere: klikk den for å få håndtak',
+  'text.hint': 'Klikk der teksten skal stå · Boksen kan flyttes og skaleres når som helst · Esc avbryter',
+  'text.placeholder': 'Tekst',
+  'text.moveGrip': 'Dra for å flytte tekstboksen',
+  'text.resizeGrip': 'Dra for å endre størrelsen – bredden står fast etterpå',
   'tb.hideAnnotsTip': 'Skjul merknader (H) – vis siden uten markeringer og notater',
   'tb.showAnnotsTip': 'Vis merknader igjen (H)',
   'tb.pen': 'Penn',
@@ -404,8 +443,8 @@ const nb = {
   'margin.sideRight': 'Høyre',
   'margin.prevComment': 'Forrige kommentar',
   'margin.nextComment': 'Neste kommentar',
-  'settings.selectionMenu': 'Meny ved tekstmarkering',
-  'settings.selectionMenuAuto': 'Vis automatisk',
+  'settings.reading': 'Lesing',
+  'settings.selectionMenuAuto': 'Meny ved tekstmarkering',
   'settings.selectionMenuAutoTip':
     'På: menyen åpner rett etter at teksten er merket. Av: merk teksten, så høyreklikk (eller hold inne) for menyen.',
   'settings.fileIcon': 'Filikon i Utforsker',
@@ -431,6 +470,59 @@ const nb = {
   'iconerr.file-icon-not-square': 'Bildet må være kvadratisk – like bredt som høyt.',
   'iconerr.file-icon-too-small': 'Bildet må være minst 48 × 48 px; 256 × 256 anbefales.',
   'iconerr.file-icon-registry': 'Windows avviste endringen av filikonet.',
+  // AI tools on this machine (MCP, shared/mcp.ts) — the settings menu's own
+  // dialog (AiToolsDialog.tsx), and the Merknader tab's line and «Kopier for KI»
+  'mcp.title': 'KI-verktøy på maskinen',
+  'mcp.menu': 'KI-verktøy (Claude, Codex …)',
+  'mcp.intro':
+    'Slå på et verktøy, så kan det søke i markeringene, kommentarene og KI-samtalene dine når du spør det om noe. Det leser aldri selve PDF-ene. Det verktøyet leser, går til leverandøren det bruker.',
+  'mcp.tools': 'Verktøy',
+  'mcp.claudeBoth': 'Claude Code og Claude Desktop',
+  'mcp.codexSub': 'Codex-CLI-en, og Codex (ikke chat) i ChatGPT-appen',
+  'mcp.notFound': 'Ikke funnet på maskinen',
+  'mcp.other': 'Andre verktøy',
+  'mcp.otherSub': 'Andre verktøy som støtter MCP – du limer inn oppsettet selv',
+  'mcp.copyHint': 'Kan et verktøy ikke kobles til, kopierer «Kopier for KI» i Merknader-fanen notatene til et dokument så du kan lime dem inn.',
+  'mcp.docs': 'Hva verktøyene får lese',
+  'mcp.docsHint': 'Bryteren ved et dokument bestemmer om markeringene og samtalene om det deles.',
+  'mcp.filter': 'Søk i dokumentene',
+  'mcp.noDocs': 'Ingen markeringer eller KI-samtaler ennå.',
+  'mcp.noMatches': 'Ingen dokumenter passer.',
+  'mcp.notesOne': '1 merknad',
+  'mcp.notesMany': '{count} merknader',
+  'mcp.convOne': '1 samtale',
+  'mcp.convMany': '{count} samtaler',
+  'mcp.lockedDoc': 'Passordbeskyttet – deles aldri',
+  'mcp.folderOut': 'Mappen holdes utenfor',
+  'mcp.folders': 'Mapper som holdes utenfor',
+  'mcp.addFolder': 'Hold en mappe utenfor …',
+  'mcp.foldersHint': 'Alt i mappen holdes utenfor, også filer som kommer senere.',
+  'mcp.letBackIn': 'Ta inn igjen',
+  'side.aiShared': 'Deles med KI-verktøy',
+  'side.aiKeptOut': 'Holdes utenfor KI-verktøy',
+  'side.aiChange': 'Endre',
+  'side.aiChangeTip': 'Velg hvilke verktøy og dokumenter som deles',
+  'mcp.checking': 'Ser etter verktøy …',
+  'mcp.restartDesktop': 'Start Claude Desktop på nytt for å ta det i bruk.',
+  'mcp.copyConfig': 'Kopier oppsett',
+  'mcp.copyCommand': 'Kopier kommando',
+  'mcp.guide': 'Slik limer du inn oppsettet',
+  'mcp.copied': 'Kopiert',
+  'mcp.store': 'Microsoft Store-utgaven kan ikke kobles til KI-verktøy. Installasjonsprogrammet fra nettsiden kan.',
+  'mcp.noScript': 'MCP-skriptet er ikke bygget (npm run build:mcp).',
+  'mcperr.mcp-unsupported': 'Denne utgaven av appen kan ikke kobles til KI-verktøy.',
+  'mcperr.mcp-client-missing': 'Fant ikke verktøyet på denne maskinen.',
+  'mcperr.mcp-config-unreadable': 'Verktøyets innstillingsfil kunne ikke leses, så den ble ikke endret.',
+  'mcperr.mcp-client-failed': 'Verktøyet avviste tilkoblingen.',
+  'side.copyForAi': 'Kopier for KI',
+  'side.copyForAiTip':
+    'Kopierer markeringene, kommentarene og KI-samtalene om dokumentet som tekst – til å lime inn i ChatGPT eller et annet verktøy',
+  'viewer.copiedForAi': 'Notatene er kopiert',
+  'viewer.nothingToCopy': 'Ingen markeringer eller samtaler å kopiere',
+  'notes.title': 'Tittel',
+  'notes.pages': 'Sider',
+  'notes.annotations': 'Markeringer og kommentarer ({count})',
+  'notes.conversations': 'KI-samtaler ({count})',
   'settings.tabIcon': 'Ikon på fanen',
   'settings.tabIconTip': 'Ikonet nettleseren viser på fanen et dokument er åpent i.',
   'settings.tabIconCustomTip':
@@ -439,10 +531,13 @@ const nb = {
   'iconerr.tab-icon-bad-file': 'Nettleseren kunne ikke lese bildet. Prøv en .png, .svg, .ico, .webp eller .jpg.',
   'iconerr.tab-icon-not-square': 'Bildet må være kvadratisk – like bredt som høyt.',
   'iconerr.tab-icon-too-small': 'Bildet må være minst 16 × 16 px.',
-  'settings.selectionMenuCompact': 'Kompakt meny',
+  'settings.selectionMenuCompact': 'Kompakt markeringsmeny',
   'settings.selectionMenuCompactTip':
     'Samme meny, mindre: tettere farger og ikoner uten tekst (navnet vises når du holder over). Assistentens valg bak ✦.',
   'settings.restoreSession': 'Åpne fanene fra forrige gang',
+  'settings.ocrAuto': 'Les tekst i bilder automatisk',
+  'settings.ocrAutoTip':
+    'Tekst på skannede sider og i bilder (figurer, innlimte tabeller) gjenkjennes her på maskinen så snart siden vises. Av: bare når du ber om det for dokumentet («Gjenkjenn tekst»). Det som er lest før, huskes uansett.',
   'settings.linkPreview': 'Forhåndsvis lenker',
   'settings.linkPreviewTip':
     'Hold pekeren over en henvisning, en figur eller en ligning for å se hva lenken peker på – uten å forlate siden. Langt trykk på berøringsskjerm.',
@@ -461,6 +556,13 @@ const nb = {
   'linkPreview.abstractFrom': 'Fra {source}',
   'linkPreview.abstractMatched': 'Gjenkjent fra referanseteksten – sjekk at tittelen stemmer',
   'linkPreview.retry': 'Prøv igjen',
+  'linkPreview.cardLabel': '{count} referanser',
+  'linkPreview.goTo': 'Gå til s. {page}',
+  'linkPreview.goToTip': 'Gå til referansen i referanselista · Ctrl+klikk åpner den i den andre kolonnen',
+  'linkPreview.search': 'Søk',
+  'linkPreview.searchTip': 'Søk etter verket i Google Scholar – åpnes i nettleseren',
+  'linkPreview.pdf': 'PDF',
+  'linkPreview.pdfTip': 'Åpne PDF-en på arXiv i nettleseren',
   'menu.abstract': 'Sammendrag',
   'menu.abstractTip': 'Henter sammendraget til artikkelen referansen viser til – fra arXiv, Europe PMC, Crossref og OpenAlex',
   'settings.restoreSessionTip': 'Ved oppstart får hvert vindu tilbake fanene det hadde. Et dokument leses først når du viser fanen. Festede faner kommer alltid tilbake.',
@@ -477,6 +579,11 @@ const nb = {
   'margin.exportReadFailed': 'fikk ikke lest dokumentets gjeldende innhold',
   'margin.exportSuffix': ' – kommentarer',
   'margin.exportDone': 'Kopi med kommentarer i margen lagret',
+  // The mark on a margin card printed away from its anchor's page (the comments
+  // on a page were taller than the page): the rest of a card cut there, or a
+  // whole card that found no room. The caller adds the brackets.
+  'margin.exportContinued': 'forts. fra s. {page}',
+  'margin.exportMoved': 'fra s. {page}',
   'tb.paneLeft': 'Venstre kolonne',
   'tb.paneRight': 'Høyre kolonne',
   'tb.zoomAppliesLeft': 'Gjelder venstre kolonne',
@@ -497,6 +604,7 @@ const nb = {
   'tb.tuneBrightness': 'Lysstyrke',
   'tb.tuneBrightnessTip': 'Sidens lysstyrke i nattmodus – 100 % er standardutseendet.',
   'tb.customTone': 'Papirtone',
+  'tb.customTints': 'Egne',
   'tb.toneWarm': 'Standard',
   'tb.toneGray': 'Grå',
   'tb.toneGreen': 'Grønn',
@@ -517,6 +625,18 @@ const nb = {
   'tb.autoLight': 'Lys',
   'tb.autoDark': 'Mørk',
   'tb.autoHint': 'Auto følger systemets lys/mørk-innstilling.',
+  'tb.readingFont': 'Leseskrift',
+  'tb.readingFontTip':
+    'Skriften i assistentens svar, kommentarer og forhåndsvisninger – ikke i menyene. Navnet på en skrift som er installert på maskinen; tomt gir systemets skrift.',
+  'tb.readingFontPlaceholder': 'Systemets skrift',
+  'tb.readingFontSample': 'Vår sære Zulu fra badeøya spilte jo whist og quickstep i min taxi.',
+  'tb.readingFontMissing': 'Finnes ikke på denne maskinen – systemets skrift vises.',
+  'tb.readingFontPick': 'Velg …',
+  'tb.readingFontPickTip': 'Velg blant skriftene som er installert på denne maskinen',
+  'tb.readingFontPicking': 'Henter …',
+  'tb.readingFontDenied': 'Nettleseren ga ikke tilgang til skriftlisten – bare vanlige skrifter vises.',
+  'tb.readingFontNoMatch': 'Ingen skrifter med dette navnet',
+  'tb.readingFontSuggest': 'Skrifter på maskinen som passer',
   'tb.pinTip': 'Fest verktøylinjen – nå skjules den, hover toppen for å vise den',
   'tb.unpinTip': 'Løsne verktøylinjen – la den skjule seg for renere lesing',
   'tb.presentTip': 'Presentasjonsmodus – én side om gangen, helskjerm',
@@ -542,6 +662,7 @@ const nb = {
   'tb.note': 'Notat',
   'tb.signature': 'Signatur',
   'tb.eraser': 'Viskelær',
+  'tb.hand': 'Hånd',
   'tb.tocRailTip': 'Innhold – klikk for å feste, hover for et raskt blikk',
   'tb.aiRailTip': 'Assistent – klikk for å feste, hover for et raskt blikk',
   'tb.rotate': 'Roter siden',
@@ -606,6 +727,8 @@ const nb = {
   'menu.squiggly': 'Bølgestrek',
   'menu.squigglyTip': 'Bølgestrek ({color})',
   'menu.customColor': 'Velg farge …',
+  'menu.customColorWheel': 'Åpne fargevelgeren – hjul, RGB og hex',
+  'menu.forgetColor': 'Glem fargen',
   'menu.aiSection': 'Assistent',
   'menu.note': 'Notat',
   'menu.bookmark': 'Lag bokmerke',
@@ -654,8 +777,11 @@ const nb = {
   'menu.dictionary': 'Definer ord',
   'menu.translate': 'Oversett',
   'bubble.resizeTip': 'Dra for å endre størrelse · dobbeltklikk for standard',
+  'bubble.resizeFitTip': 'Dra for å endre størrelse · dobbeltklikk viser hele teksten, igjen for standard',
   'bubble.resizeHeightTip': 'Dra opp for mer plass · dobbeltklikk for standard',
   'menu.newNoteHere': 'Nytt notat her',
+  'menu.copyEmail': 'Kopier e-postadresse',
+  'menu.copyLink': 'Kopier lenkeadresse',
   'menu.notePlaceholder': 'Skriv et notat …',
   'menu.count': 'Ordtelling',
   'menu.words': 'Ord',
@@ -743,6 +869,12 @@ const nb = {
   'search.listShow': 'Vis treffliste',
   'search.listHide': 'Skjul treffliste',
   'search.aiNoText': 'Dokumentet har ingen tekst å søke i (skannet)',
+  'search.ocrReading': 'Leser skannede sider og tekst i bilder … {done} av {total}',
+  'search.ocrPages': 'Leser skannede sider … {done} av {total}',
+  'search.ocrImages': 'Søker også i tekst i bilder … {done} av {total}',
+  'search.ocrOffer': 'Skannede sider er ikke lest ennå.',
+  'ocr.enable': 'Gjenkjenn tekst',
+  'ocr.enableTip': 'Sidene er skannet. Les teksten på dem her på maskinen, så du kan søke, markere og spørre assistenten.',
 
   // Viewer
   'viewer.errorTitle': 'Kunne ikke vise dokumentet.',
@@ -878,6 +1010,11 @@ const nb = {
   'ai.chatgptHintTip':
     'Samme innlogging som Codex og opencode bruker. OpenAI tillater den i dag, men har ingen avtale om den og kan stenge den. Det du sender behandles etter ChatGPT-vilkårene (ikke API-vilkårene), så innstillingen for modelltrening på ChatGPT-kontoen din gjelder.',
   'ai.chatgptDesktopOnly': 'Bare i skrivebordsappen.',
+  'ai.chatgptBorrow': 'Bruk innloggingen fra skrivebordsappen',
+  'ai.chatgptBorrowed': 'Logget inn som {account} via skrivebordsappen',
+  'ai.chatgptDisconnect': 'Koble fra',
+  'ai.chatgptBorrowTip':
+    'Låner ChatGPT-innloggingen fra PDF Scholar på denne maskinen. Appen må være installert og logget inn, men trenger ikke være åpen. Nettleseren spør én gang om lov til å starte den.',
   'ai.localTag': 'lokal',
   'ai.keySaved': '•••••••• (lagret)',
   'ai.keyNew': 'Lim inn nøkkelen din',
@@ -890,16 +1027,20 @@ const nb = {
   'ai.compatModelHint': 'f.eks. llama3.1 eller mistral-medium-latest',
   'ai.compatHint':
     'For lokale modeller (Ollama og LM Studio kjører uten nøkkel – velg dem i listen) og alle andre OpenAI-kompatible endepunkter – velg «Annet» og skriv inn base-URL-en. Modellisten hentes fra endepunktet når du lagrer.',
-  'ai.modelFilter': 'Filtrer modeller …',
+  'ai.modelFilter': 'Filtrer modeller, eller skriv en modell-id …',
   // The filter searches past the selection the menu offers — say so, or the
   // models curateRemoteModels leaves out look gone rather than unlisted
-  'ai.modelFilterAll': 'Søk i alle modeller …',
+  'ai.modelFilterAll': 'Søk i alle modeller, eller skriv en modell-id …',
   'ai.modelCount': '{models} modeller · {vendors} leverandører',
   'ai.modelCountShort': '{models} modeller',
   'ai.notConfigured': 'ikke satt opp',
   'ai.noModelsListed': 'ingen modeller',
   'ai.modelNoHits': 'Ingen modeller matcher søket.',
   'ai.modelMoreHits': '+{n} treff til – skriv mer for å snevre inn.',
+  'ai.modelUseTyped': 'Bruk «{id}»',
+  'ai.modelTypedDetail': '{provider} – ikke utprøvd her, kan svare annerledes',
+  'ai.modelTypedHint':
+    'Modellen står ikke i den kuraterte lista. Id-en sendes som den er til {provider}; en id leverandøren ikke kjenner gir en feilmelding.',
   'ai.ollamaDetected': 'Ollama kjører på denne maskinen – klikk for å fylle inn adressen',
   'ai.noVisionTip': 'Valgt modell ({model}) kan ikke lese bilder',
   'ai.keyCapHint': 'Sett et utgiftstak på nøkkelen – samme sted viser leverandøren hva du faktisk har brukt. Appen teller tokens, men bare leverandøren vet prisen.',
@@ -945,6 +1086,36 @@ const nb = {
   'ai.annotsTip': 'Spør assistenten om merknadene dine',
   'ai.annotsChip': 'Merknadene dine',
   'ai.removeAnnotsTip': 'Fjern merknadene fra spørsmålet',
+  'ai.attachConvsBtn': 'Samtaler',
+  'ai.attachConvsTip': 'Legg ved tidligere samtaler som kontekst',
+  'ai.attachConvsTitle': 'Legg ved tidligere samtaler',
+  'ai.attachConvsNote': 'Spørsmålene og svarene i det du krysser av, sendes til {name} med hvert spørsmål i denne samtalen, til du tar dem av. Svarene kan sitere andre dokumenter. Bilder sendes ikke.',
+  'ai.attachConvsModel': 'modellen',
+  'ai.attachConvsNone': 'Ingen andre samtaler ennå.',
+  'ai.attachConvsThisDoc': 'Dette dokumentet',
+  'ai.attachConvsCount': '{count} av {max} valgt',
+  'ai.attachConvsApply': 'Legg ved',
+  'ai.attachedMissing': 'Samtalen finnes ikke lenger og sendes ikke',
+  'ai.attachedTokens': 'Omtrent {tokens} tokens',
+  'ai.removeAttachedTip': 'Ta av samtalen',
+  'ai.confirmAttached': 'Vedlagte samtaler om {names} følger med.',
+  'ai.confirmFiles': 'Vedlagte filer følger med: {names}.',
+  'ai.attachBtnTip': 'Legg ved: samtaler, bilder og filer',
+  'ai.attachMenuTitle': 'Vedlegg',
+  'ai.attachMenuNote': 'Vedlegg følger hvert spørsmål i denne samtalen til du tar dem av.',
+  'ai.attachMenuEmpty': 'Ingenting vedlagt ennå.',
+  'ai.attachMenuConv': 'Samtale …',
+  'ai.attachMenuImage': 'Bilde …',
+  'ai.attachMenuFile': 'Fil …',
+  'ai.attachFileTip': 'Legg ved en PDF- eller tekstfil som kontekst – teksten sendes til modellen med hvert spørsmål',
+  'ai.removeFileTip': 'Ta av fila',
+  'ai.fileCut': ' – forkortet',
+  'ai.filesLimit': 'Høyst {max} filer om gangen',
+  'ai.fileType': 'Bare PDF og tekstfiler (.txt, .md, .csv …) kan legges ved: {name}',
+  'ai.fileUnreadable': 'Fila kunne ikke leses: {name}',
+  'ai.fileNoText': 'Fila har ingen tekst å sende: {name}',
+  'ai.conversationChip': 'Samtale',
+  'ai.conversationChipTip': 'Åpne samtalen svaret bygger på',
   'side.askAiTip':
     'Åpner assistenten med et utkast til spørsmål om merknadene – ingenting sendes før du trykker send',
   'ai.quickExplain': 'Forklar',
@@ -957,10 +1128,9 @@ const nb = {
   'ai.attachTip': 'Legg ved bilde',
   'ai.removeImageTip': 'Fjern bilde',
   'ai.imageAlt': 'Vedlagt bilde',
-  'ai.webSearchOffTip': 'Nettsøk er stengt – klikk for å tillate søk når du ber om det',
-  'ai.webSearchAskTip':
-    'Nettsøk ved forespørsel – assistenten søker bare når du ber om det i meldingen. Klikk for alltid på.',
-  'ai.webSearchOnTip': 'Nettsøk er på – assistenten søker på nettet ved behov. Klikk for å stenge.',
+  'ai.webSearchOffTip': 'Nettsøk er av – klikk for å gi assistenten nettsøk når et spørsmål trenger det',
+  'ai.webSearchOnTip':
+    'Nettsøk er på – assistenten søker på nettet når spørsmålet ber om det, uttrykkelig eller underforstått, aldri fordi dokumentet sier det. Klikk for å slå av.',
   'ai.quickQuestion': '{title}: «{selection}» (s. {page})',
   'ai.mockOnlyWeb': 'Nettleser-forhåndsvisningen støtter kun mock-leverandøren. Bruk appen for ekte KI.',
   'ai.calloutMock':
@@ -970,6 +1140,7 @@ const nb = {
   'ai.calloutNoText':
     'Dette dokumentet har ingen tekst å lese – sidene er bilder (skannet). Assistenten kan derfor ikke søke i teksten eller lese hele dokumentet på egen hånd, men den kan lese sidene du legger ved som bilder. «Forklar område» virker også: dra en firkant rundt en figur, og bildet sendes.',
   'ai.readPagesFrom': 'Fra side',
+  'ai.ocrReading': 'Sidene er skannet, så teksten på dem leses først av her på maskinen: {done} av {total} sider.',
   'ai.readPagesTo': 'til',
   'ai.readPagesCta': 'Legg ved sidene',
   'ai.readPagesBusy': 'Gjengir …',
@@ -981,9 +1152,66 @@ const nb = {
   'ai.removePagesTip': 'Fjern sidene',
   'ai.aborted': 'Avbrutt',
   'ai.newChatTip': 'Ny samtale',
-  'ai.historyTip': 'Samtalehistorikk for dette dokumentet',
+  'ai.historyTip': 'Samtalehistorikk',
   'ai.historyTitle': 'Tidligere samtaler',
   'ai.historyEmpty': 'Ingen tidligere samtaler for dette dokumentet.',
+  'ai.historyEmptyAll': 'Ingen tidligere samtaler.',
+  'ai.historySearch': 'Søk i samtalene',
+  'ai.historyAllDocs': 'Alle dokumenter',
+  'ai.historyNoHits': 'Ingen samtaler passer til søket.',
+  'ai.historyOpenElsewhereTip': 'Åpne dokumentet på denne samtalen',
+  'ai.imagesWithheld': 'Bilder ikke lagret ({count})',
+  'lib.tab': 'Samtaler',
+  'lib.tidy': 'Rydd opp og eksporter',
+  'lib.totals': '{conversations} samtaler om {documents} dokumenter',
+  'lib.totalsImages': '{size} bilder',
+  'lib.empty': 'Ingen samtaler ennå. Samtalene du har med assistenten om et dokument, samles her.',
+  'lib.back': 'Alle samtaler',
+  'lib.openInDoc': 'Åpne i dokumentet',
+  'lib.gone': 'Dokumenter som ikke finnes lenger',
+  'lib.goneChecking': 'Ser etter filene …',
+  'lib.goneNone': 'Alle dokumentene finnes',
+  'lib.goneCount': '{documents} dokumenter, {conversations} samtaler',
+  'lib.goneHint': 'Glemmer alt om dem: samtaler, leseposisjon, bokmerker og oppføringen i «Nylig lest». Ulagrede merknader røres ikke.',
+  'lib.forget': 'Glem',
+  'lib.older': 'Eldre enn',
+  'lib.ageMonths': '{n} måneder',
+  'lib.ageYears': '{n} år',
+  'lib.keep': 'Behold bare de nyeste',
+  'lib.images': 'Fjern bilder, behold teksten',
+  'lib.imagesCount': '{images} bilder i {conversations} samtaler · {size}',
+  'lib.count': '{conversations} samtaler om {documents} dokumenter',
+  'lib.none': 'Ingen',
+  'lib.delete': 'Slett',
+  'lib.remove': 'Fjern',
+  'lib.confirmDelete': 'Sletter {conversations} samtaler om {documents} dokumenter. Dette kan ikke angres.',
+  'lib.confirmImages': 'Fjerner {images} bilder fra {conversations} samtaler. Spørsmål og svar beholdes. Dette kan ikke angres.',
+  'lib.confirmForget': 'Glemmer alt om {documents} dokumenter som ikke finnes lenger. Dette kan ikke angres.',
+  'lib.deleted': '{conversations} samtaler slettet',
+  'lib.imagesRemoved': '{images} bilder fjernet',
+  'lib.forgotten': '{documents} dokumenter glemt',
+  'lib.export': 'Eksporter alle samtaler',
+  'lib.exportHint': 'Markdown til lesing, JSON med alt',
+  'lib.exportTitle': 'Samtaler fra PDF Scholar',
+  'lib.exportFileName': 'PDF Scholar-samtaler',
+  'lib.exported': 'Lagret som {name}',
+  'lib.fileMissing': 'Filen finnes ikke',
+  'lib.fileMissingTip': 'Dokumentet ligger ikke lenger der samtalen ble ført. Flyttes det tilbake, eller åpnes det fra en ny plass, følger samtalene med.',
+  'lib.custom': 'Egendefinert …',
+  'lib.customMonths': 'Antall måneder',
+  'lib.months': 'måneder',
+  'lib.customCount': 'Antall samtaler å beholde',
+  'lib.sort': 'Sorter',
+  'lib.sort_updated': 'Sist endret',
+  'lib.sort_created': 'Opprettet',
+  'lib.sort_name': 'Dokument A–Å',
+  'lib.sort_messages': 'Flest meldinger',
+  'lib.filters': 'Filtre',
+  'lib.filterDocClear': 'Vis alle dokumenter',
+  'lib.filterMissing': 'Filen mangler',
+  'lib.filterImages': 'Med bilder',
+  'lib.showConversations': 'Vis samtaler',
+  'lib.badge': '{count} samtaler',
   'ai.historyDeleteTip': 'Slett samtalen',
   'ai.historyMessages': '{count} meldinger',
   'ai.jumpNewestTip': 'Hopp til nyeste melding',
@@ -992,6 +1220,8 @@ const nb = {
   'ai.copyMdDone': 'Kopiert',
   'ai.exportYou': 'Du',
   'ai.exportAssistant': 'Assistent',
+  'ai.exportPassages': 'Siterte passasjer:',
+  'ai.exportPassage': '{marker} «{text}»',
 
   // Keyboard map (the Hurtigtaster dialog). Command labels are the same words
   // the toolbar and merknadslisten use for the same thing — a map that renames
@@ -1054,9 +1284,14 @@ const nb = {
   'keys.tabPrev': 'Forrige fane',
   'keys.tabClose': 'Lukk fanen',
   'keys.tabReopen': 'Gjenåpne sist lukkede fane',
+  'keys.tabDuplicate': 'Dupliser fanen',
   'keys.tabMoveLeft': 'Flytt fanen mot venstre',
   'keys.tabMoveRight': 'Flytt fanen mot høyre',
   'keys.tabPin': 'Fest eller løsne fanen',
+  'keys.tabSearch': 'Søk i åpne faner',
+  'keys.tabGoto': 'Gå til fane {n}',
+  'keys.tabLast': 'Gå til siste fane',
+  'keys.copyPath': 'Kopier stien til dokumentet',
 
   'keys.navBack': 'Tilbake (etter et lenkehopp)',
   'keys.navForward': 'Fram igjen',
@@ -1113,6 +1348,7 @@ const nb = {
   'keys.toolArrow': 'Pil',
   'keys.toolSignature': 'Signatur',
   'keys.toolSnip': 'Forklar område',
+  'keys.navHand': 'Håndverktøy',
 
   // Auto-update (Electron only)
   'update.available': 'Ny versjon tilgjengelig',
@@ -1169,6 +1405,7 @@ const en: Dict = {
   'app.reloadFromDisk': 'Reload …',
   'app.keepMine': 'Keep my version',
   'app.reloadedFromDisk': '"{name}" changed on disk and was reloaded',
+  'app.identityRebound': 'Recognised from "{from}" — conversations, bookmarks and reading position came along',
   'crash.title': 'Something went wrong',
   'crash.body':
     'The view stopped unexpectedly. Unsaved annotations are safely stored and will be picked up again when you reload.',
@@ -1241,6 +1478,14 @@ const en: Dict = {
   'aierr.ai-aborted': 'Stopped',
   'aierr.ai-disabled': 'AI features are switched off in the AI settings, so no request was sent.',
   'aierr.ai-chatgpt-signed-out': 'You are not signed in with ChatGPT. Sign in from the AI settings.',
+  'aierr.ai-chatgpt-desktop-signed-out':
+    'PDF Scholar for desktop is not signed in with ChatGPT. Sign in from the app’s AI settings and it works here too.',
+  'aierr.ai-chatgpt-host-missing':
+    'Couldn’t find PDF Scholar for desktop on this computer. Install the app (not the Microsoft Store edition) and start it once.',
+  'aierr.ai-chatgpt-host-outdated': 'The desktop app and the extension are on different versions. Update both.',
+  'aierr.ai-chatgpt-host-failed': 'PDF Scholar for desktop started but did not answer.',
+  'aierr.ai-chatgpt-host-denied':
+    'The browser was not allowed to start PDF Scholar for desktop, so its sign-in can’t be borrowed.',
   'aierr.ai-chatgpt-session-expired':
     'The ChatGPT sign-in has expired or was revoked. Sign in again from the AI settings.',
   'aierr.ai-subscription-limit':
@@ -1300,6 +1545,7 @@ const en: Dict = {
   'welcome.recentsList': 'Show as list',
   'welcome.recentsGrid': 'Show first pages',
   'welcome.recentsProgress': 'p. {page} of {pages}',
+  'tabs.cardPage': 'p. {page}',
   'welcome.recentsPinned': 'Pinned',
   'welcome.recentsPin': 'Pin to top',
   'welcome.recentsUnpin': 'Unpin',
@@ -1316,14 +1562,14 @@ const en: Dict = {
   'tabs.pin': 'Pin tab',
   'tabs.unpin': 'Unpin tab',
   'tabs.closeOthers': 'Close other tabs',
-  'tabs.closeToRight': 'Close tabs to the right',
-  'tabs.moveLeft': 'Move left',
-  'tabs.moveRight': 'Move right',
   'tabs.new': 'Open PDF',
   'tabs.newWindow': 'New window',
   'tabs.allTip': 'All open tabs',
-  'tabs.allLabel': 'Open tabs',
+  'tabs.searchPlaceholder': 'Search tabs',
+  'tabs.searchEmpty': 'No tabs match',
+  'doc.pathCopied': 'Path copied',
   'tabs.openInNewWindow': 'Open in new window',
+  'tabs.duplicate': 'Duplicate tab',
   'tabs.openInSplit': 'Open in split view',
   'tb.swapPanesTip': 'Swap the columns',
   'tb.splitOtherFile': 'Another file …',
@@ -1350,6 +1596,27 @@ const en: Dict = {
   'tabs.reload': 'Reload',
   'tabs.moveToNewWindow': 'Move to new window',
   'tabs.showInFolder': 'Show in File Explorer',
+  'tabs.groupNew': 'Add to new group',
+  'tabs.groupAddTo': 'Add to “{name}”',
+  'tabs.groupAddToUnnamed': 'Add to unnamed group',
+  'tabs.groupRemove': 'Remove from group',
+  'tabs.groupNewMany': 'Add {n} tabs to new group',
+  'tabs.groupAddToMany': 'Add {n} tabs to “{name}”',
+  'tabs.groupAddToUnnamedMany': 'Add {n} tabs to unnamed group',
+  'tabs.groupRemoveMany': 'Remove {n} tabs from their groups',
+  'tabs.closeMany': 'Close {n} tabs',
+  'tabs.groupNamePlaceholder': 'Name this group',
+  'tabs.groupCollapse': 'Collapse',
+  'tabs.groupExpand': 'Expand',
+  'tabs.groupUngroup': 'Ungroup',
+  'tabs.groupClose': 'Close group',
+  'tabs.groupChipTip': '{n} tabs — click to collapse or expand, right-click for name and colour',
+  'tabs.groupColor.blue': 'Blue',
+  'tabs.groupColor.green': 'Green',
+  'tabs.groupColor.yellow': 'Yellow',
+  'tabs.groupColor.red': 'Red',
+  'tabs.groupColor.purple': 'Purple',
+  'tabs.groupColor.grey': 'Grey',
 
   'tb.library': 'Library',
   'tb.libraryTip': 'Back to the library',
@@ -1369,6 +1636,9 @@ const en: Dict = {
   'tb.markupTip': 'Mark up text — drag over text to highlight (Esc to finish)',
   'tb.markupOptionsTip': 'Choose type and colour',
   'tb.eraserTip': 'Eraser — removes pen, highlighter and shapes (Esc to finish)',
+  'tb.handTip': 'Hand tool — drag to move the page (Esc to finish)',
+  'tb.spaceHand': 'Space holds the hand',
+  'tb.spaceHandTip': 'Hold Space to drag the page — release, and the tool you had is back',
   'tb.eraserAllTip': 'Eraser — removes every annotation (Esc to finish)',
   'tb.eraserOptionsTip': 'Choose what the eraser removes',
   'tb.eraserScopeDraw': 'Drawn marks',
@@ -1392,8 +1662,11 @@ const en: Dict = {
   'tb.textTip': 'Text on the page — click where the text should go (Esc to finish)',
   'tb.textOptionsTip': 'Text colour and size',
   'tb.fontSize': 'Size',
-  'tb.textMoveHint': 'The text box can be moved and resized afterwards — click it for handles',
-  'text.hint': 'Click where the text should go · The box can be moved and resized later · Esc cancels',
+  'tb.textMoveHint': 'Drag the dots to move the box while you type, the corner to resize — later, click it for handles',
+  'text.hint': 'Click where the text should go · The box can be moved and resized at any time · Esc cancels',
+  'text.placeholder': 'Text',
+  'text.moveGrip': 'Drag to move the text box',
+  'text.resizeGrip': 'Drag to resize — the width then stays put',
   'tb.hideAnnotsTip': 'Hide annotations (H) — show the page without markup and notes',
   'tb.showAnnotsTip': 'Show annotations again (H)',
   'tb.pen': 'Pen',
@@ -1495,8 +1768,8 @@ const en: Dict = {
   'margin.sideRight': 'Right',
   'margin.prevComment': 'Previous comment',
   'margin.nextComment': 'Next comment',
-  'settings.selectionMenu': 'Menu on text selection',
-  'settings.selectionMenuAuto': 'Show automatically',
+  'settings.reading': 'Reading',
+  'settings.selectionMenuAuto': 'Menu on text selection',
   'settings.selectionMenuAutoTip':
     'On: the menu opens right after the text is selected. Off: select the text, then right-click (or long-press) for the menu.',
   'settings.fileIcon': 'File icon in Explorer',
@@ -1522,6 +1795,57 @@ const en: Dict = {
   'iconerr.file-icon-not-square': 'The image must be square — as wide as it is tall.',
   'iconerr.file-icon-too-small': 'The image must be at least 48 × 48 px; 256 × 256 is recommended.',
   'iconerr.file-icon-registry': 'Windows refused the file icon change.',
+  'mcp.title': 'AI tools on this computer',
+  'mcp.menu': 'AI tools (Claude, Codex …)',
+  'mcp.intro':
+    'Turn a tool on and it can search your highlights, comments and AI conversations when you ask it something. It never reads the PDFs themselves. What the tool reads goes to the provider it uses.',
+  'mcp.tools': 'Tools',
+  'mcp.claudeBoth': 'Claude Code and Claude Desktop',
+  'mcp.codexSub': 'The Codex CLI, and Codex (not chat) in the ChatGPT app',
+  'mcp.notFound': 'Not found on this computer',
+  'mcp.other': 'Other tools',
+  'mcp.otherSub': 'Any other tool that supports MCP — you paste the setup in yourself',
+  'mcp.copyHint': "For a tool that cannot connect, «Copy for AI» in the Annotations tab copies a document's notes for you to paste.",
+  'mcp.docs': 'What the tools may read',
+  'mcp.docsHint': "A document's switch decides whether its annotations and conversations are shared.",
+  'mcp.filter': 'Search the documents',
+  'mcp.noDocs': 'No annotations or AI conversations yet.',
+  'mcp.noMatches': 'No documents match.',
+  'mcp.notesOne': '1 annotation',
+  'mcp.notesMany': '{count} annotations',
+  'mcp.convOne': '1 conversation',
+  'mcp.convMany': '{count} conversations',
+  'mcp.lockedDoc': 'Password-protected — never shared',
+  'mcp.folderOut': 'Its folder is kept out',
+  'mcp.folders': 'Folders kept out',
+  'mcp.addFolder': 'Keep a folder out …',
+  'mcp.foldersHint': 'Everything in the folder is kept out, including files added later.',
+  'mcp.letBackIn': 'Let back in',
+  'side.aiShared': 'Shared with AI tools',
+  'side.aiKeptOut': 'Kept out of AI tools',
+  'side.aiChange': 'Change',
+  'side.aiChangeTip': 'Choose which tools and documents are shared',
+  'mcp.checking': 'Looking for tools …',
+  'mcp.restartDesktop': 'Restart Claude Desktop to use it.',
+  'mcp.copyConfig': 'Copy setup',
+  'mcp.copyCommand': 'Copy command',
+  'mcp.guide': 'How to paste the setup',
+  'mcp.copied': 'Copied',
+  'mcp.store': 'The Microsoft Store edition cannot be connected to AI tools. The installer from the website can.',
+  'mcp.noScript': 'The MCP script is not built (npm run build:mcp).',
+  'mcperr.mcp-unsupported': 'This edition of the app cannot be connected to AI tools.',
+  'mcperr.mcp-client-missing': 'The tool was not found on this computer.',
+  'mcperr.mcp-config-unreadable': "The tool's settings file could not be read, so it was left as it was.",
+  'mcperr.mcp-client-failed': 'The tool refused the connection.',
+  'side.copyForAi': 'Copy for AI',
+  'side.copyForAiTip':
+    "Copies the document's highlights, comments and AI conversations as text — to paste into ChatGPT or another tool",
+  'viewer.copiedForAi': 'Notes copied',
+  'viewer.nothingToCopy': 'No annotations or conversations to copy',
+  'notes.title': 'Title',
+  'notes.pages': 'Pages',
+  'notes.annotations': 'Annotations ({count})',
+  'notes.conversations': 'AI conversations ({count})',
   'settings.tabIcon': 'Tab icon',
   'settings.tabIconTip': 'The icon the browser shows on the tab a document is open in.',
   'settings.tabIconCustomTip':
@@ -1530,10 +1854,13 @@ const en: Dict = {
   'iconerr.tab-icon-bad-file': 'The browser could not read the picture. Try a .png, .svg, .ico, .webp or .jpg.',
   'iconerr.tab-icon-not-square': 'The picture must be square — as wide as it is tall.',
   'iconerr.tab-icon-too-small': 'The picture must be at least 16 × 16 px.',
-  'settings.selectionMenuCompact': 'Compact menu',
+  'settings.selectionMenuCompact': 'Compact selection menu',
   'settings.selectionMenuCompactTip':
     'The same menu, smaller: tighter colours and icons without text (hover for the name). The assistant’s actions behind ✦.',
   'settings.restoreSession': 'Reopen last session’s tabs',
+  'settings.ocrAuto': 'Read text in images automatically',
+  'settings.ocrAutoTip':
+    'Text on scanned pages and in images (figures, pasted-in tables) is recognised on this computer as soon as a page is shown. Off: only when you ask for it per document (“Recognise text”). What was read before is remembered either way.',
   'settings.linkPreview': 'Preview links',
   'settings.linkPreviewTip':
     'Rest the pointer on a citation, a figure or an equation reference to see what the link points to — without leaving the page. Long-press on a touchscreen.',
@@ -1552,6 +1879,13 @@ const en: Dict = {
   'linkPreview.abstractFrom': 'From {source}',
   'linkPreview.abstractMatched': 'Recognised from the reference text — check that the title matches',
   'linkPreview.retry': 'Try again',
+  'linkPreview.cardLabel': '{count} references',
+  'linkPreview.goTo': 'Go to p. {page}',
+  'linkPreview.goToTip': 'Go to the entry in the reference list · Ctrl+click opens it in the other column',
+  'linkPreview.search': 'Search',
+  'linkPreview.searchTip': 'Search for the work on Google Scholar — opens in your browser',
+  'linkPreview.pdf': 'PDF',
+  'linkPreview.pdfTip': 'Open the PDF on arXiv in your browser',
   'menu.abstract': 'Abstract',
   'menu.abstractTip': 'Fetches the abstract of the paper this reference names — from arXiv, Europe PMC, Crossref and OpenAlex',
   'settings.restoreSessionTip': 'At startup, every window gets back the tabs it had. Each document is read only when you show its tab. Pinned tabs always come back.',
@@ -1568,6 +1902,8 @@ const en: Dict = {
   'margin.exportReadFailed': 'could not read the document’s current contents',
   'margin.exportSuffix': ' – comments',
   'margin.exportDone': 'Copy with margin comments saved',
+  'margin.exportContinued': 'cont. from p. {page}',
+  'margin.exportMoved': 'from p. {page}',
   'tb.paneLeft': 'Left column',
   'tb.paneRight': 'Right column',
   'tb.zoomAppliesLeft': 'Applies to the left column',
@@ -1588,6 +1924,7 @@ const en: Dict = {
   'tb.tuneBrightness': 'Brightness',
   'tb.tuneBrightnessTip': 'The page’s brightness in night mode — 100 % is the standard look.',
   'tb.customTone': 'Paper tone',
+  'tb.customTints': 'Custom',
   'tb.toneWarm': 'Default',
   'tb.toneGray': 'Gray',
   'tb.toneGreen': 'Green',
@@ -1607,6 +1944,18 @@ const en: Dict = {
   'tb.autoLight': 'Light',
   'tb.autoDark': 'Dark',
   'tb.autoHint': 'Auto follows the system light/dark setting.',
+  'tb.readingFont': 'Reading font',
+  'tb.readingFontTip':
+    'The face in the assistant’s answers, comments and previews — not the menus. The name of a font installed on this machine; empty means the system font.',
+  'tb.readingFontPlaceholder': 'System font',
+  'tb.readingFontSample': 'The quick brown fox jumps over the lazy dog.',
+  'tb.readingFontMissing': 'Not on this machine — the system font is shown.',
+  'tb.readingFontPick': 'Choose …',
+  'tb.readingFontPickTip': 'Choose among the fonts installed on this machine',
+  'tb.readingFontPicking': 'Fetching …',
+  'tb.readingFontDenied': 'The browser refused the font list — only common fonts are listed.',
+  'tb.readingFontNoMatch': 'No fonts by that name',
+  'tb.readingFontSuggest': 'Matching fonts on this machine',
   'tb.pinTip': 'Pin the toolbar — it now hides itself; hover the top to reveal it',
   'tb.unpinTip': 'Unpin the toolbar — let it hide itself for cleaner reading',
   'tb.presentTip': 'Presentation mode — one page at a time, full screen',
@@ -1631,6 +1980,7 @@ const en: Dict = {
   'tb.note': 'Note',
   'tb.signature': 'Signature',
   'tb.eraser': 'Eraser',
+  'tb.hand': 'Hand',
   'tb.tocRailTip': 'Contents — click to pin, hover for a quick look',
   'tb.aiRailTip': 'Assistant — click to pin, hover for a quick look',
   'tb.rotate': 'Rotate page',
@@ -1691,6 +2041,8 @@ const en: Dict = {
   'menu.squiggly': 'Squiggly underline',
   'menu.squigglyTip': 'Squiggly underline ({color})',
   'menu.customColor': 'Pick a color …',
+  'menu.customColorWheel': 'Open the color picker — wheel, RGB and hex',
+  'menu.forgetColor': 'Forget this color',
   'menu.aiSection': 'Assistant',
   'menu.note': 'Note',
   'menu.bookmark': 'Create bookmark',
@@ -1736,8 +2088,11 @@ const en: Dict = {
   'menu.dictionary': 'Define word',
   'menu.translate': 'Translate',
   'bubble.resizeTip': 'Drag to resize · double-click for the default',
+  'bubble.resizeFitTip': 'Drag to resize · double-click shows the whole text, again for the default',
   'bubble.resizeHeightTip': 'Drag up for more room · double-click for the default',
   'menu.newNoteHere': 'New note here',
+  'menu.copyEmail': 'Copy email address',
+  'menu.copyLink': 'Copy link address',
   'menu.notePlaceholder': 'Write a note …',
   'menu.count': 'Word count',
   'menu.words': 'Words',
@@ -1817,6 +2172,12 @@ const en: Dict = {
   'search.listShow': 'Show results list',
   'search.listHide': 'Hide results list',
   'search.aiNoText': 'This document has no text to search (scanned)',
+  'search.ocrReading': 'Reading scanned pages and text in images … {done} of {total}',
+  'search.ocrPages': 'Reading scanned pages … {done} of {total}',
+  'search.ocrImages': 'Also searching text in images … {done} of {total}',
+  'search.ocrOffer': 'Scanned pages have not been read yet.',
+  'ocr.enable': 'Recognise text',
+  'ocr.enableTip': 'The pages are scanned. Read their text on this computer so you can search, select and ask the assistant.',
 
   'viewer.errorTitle': 'Could not display the document.',
   'viewer.errorBytes': '({bytes} bytes read, starts “{head}”, ends “{tail}”)',
@@ -1937,6 +2298,11 @@ const en: Dict = {
   'ai.chatgptHintTip':
     'The same sign-in Codex and opencode use. OpenAI allows it today but has no agreement covering it and can close it. What you send is handled under ChatGPT’s terms (not the API’s), so your ChatGPT account’s model-training setting applies.',
   'ai.chatgptDesktopOnly': 'Desktop app only.',
+  'ai.chatgptBorrow': 'Use the desktop app’s sign-in',
+  'ai.chatgptBorrowed': 'Signed in as {account} via the desktop app',
+  'ai.chatgptDisconnect': 'Disconnect',
+  'ai.chatgptBorrowTip':
+    'Borrows the ChatGPT sign-in from PDF Scholar on this computer. The app must be installed and signed in, but need not be open. The browser asks once for permission to start it.',
   'ai.localTag': 'local',
   'ai.keySaved': '•••••••• (saved)',
   'ai.keyNew': 'Paste your key',
@@ -1949,14 +2315,18 @@ const en: Dict = {
   'ai.compatModelHint': 'e.g. llama3.1 or mistral-medium-latest',
   'ai.compatHint':
     'For local models (Ollama and LM Studio run without a key — pick them in the list) and any other OpenAI-compatible endpoint — pick "Other" and enter its base URL. The model list is fetched from the endpoint when you save.',
-  'ai.modelFilter': 'Filter models …',
-  'ai.modelFilterAll': 'Search all models …',
+  'ai.modelFilter': 'Filter models, or type a model id …',
+  'ai.modelFilterAll': 'Search all models, or type a model id …',
   'ai.modelCount': '{models} models · {vendors} vendors',
   'ai.modelCountShort': '{models} models',
   'ai.notConfigured': 'not set up',
   'ai.noModelsListed': 'no models listed',
   'ai.modelNoHits': 'No models match the search.',
   'ai.modelMoreHits': '+{n} more matches — type more to narrow it down.',
+  'ai.modelUseTyped': 'Use “{id}”',
+  'ai.modelTypedDetail': '{provider} — untested here, may answer differently',
+  'ai.modelTypedHint':
+    'This model is not on the curated list. The id is sent as typed to {provider}; an id the provider does not know gives an error.',
   'ai.ollamaDetected': 'Ollama is running on this machine — click to fill in the address',
   'ai.noVisionTip': 'The selected model ({model}) cannot read images',
   'ai.keyCapHint': 'Set a spending cap on the key — the same page shows what you have actually used. This app counts tokens; only the provider knows the price.',
@@ -2000,6 +2370,36 @@ const en: Dict = {
   'ai.annotsTip': 'Ask the assistant about your annotations',
   'ai.annotsChip': 'Your annotations',
   'ai.removeAnnotsTip': 'Remove the annotations from the question',
+  'ai.attachConvsBtn': 'Conversations',
+  'ai.attachConvsTip': 'Attach earlier conversations as context',
+  'ai.attachConvsTitle': 'Attach earlier conversations',
+  'ai.attachConvsNote': 'The questions and answers of what you tick go to {name} with every question in this conversation, until you take them off. The answers may quote other documents. No images are sent.',
+  'ai.attachConvsModel': 'the model',
+  'ai.attachConvsNone': 'No other conversations yet.',
+  'ai.attachConvsThisDoc': 'This document',
+  'ai.attachConvsCount': '{count} of {max} chosen',
+  'ai.attachConvsApply': 'Attach',
+  'ai.attachedMissing': 'The conversation no longer exists and is not sent',
+  'ai.attachedTokens': 'About {tokens} tokens',
+  'ai.removeAttachedTip': 'Take the conversation off',
+  'ai.confirmAttached': 'Attached conversations about {names} go along.',
+  'ai.confirmFiles': 'Attached files go along: {names}.',
+  'ai.attachBtnTip': 'Attach: conversations, images and files',
+  'ai.attachMenuTitle': 'Attachments',
+  'ai.attachMenuNote': 'Attachments go with every question in this conversation until you take them off.',
+  'ai.attachMenuEmpty': 'Nothing attached yet.',
+  'ai.attachMenuConv': 'Conversation …',
+  'ai.attachMenuImage': 'Image …',
+  'ai.attachMenuFile': 'File …',
+  'ai.attachFileTip': 'Attach a PDF or text file as context — its text goes to the model with every question',
+  'ai.removeFileTip': 'Take the file off',
+  'ai.fileCut': ' — shortened',
+  'ai.filesLimit': 'At most {max} files at a time',
+  'ai.fileType': 'Only PDF and text files (.txt, .md, .csv …) can be attached: {name}',
+  'ai.fileUnreadable': 'The file could not be read: {name}',
+  'ai.fileNoText': 'The file has no text to send: {name}',
+  'ai.conversationChip': 'Conversation',
+  'ai.conversationChipTip': 'Open the conversation the answer draws on',
   'side.askAiTip':
     'Opens the assistant with a draft question about your annotations — nothing is sent until you press send',
   'ai.quickExplain': 'Explain',
@@ -2012,10 +2412,9 @@ const en: Dict = {
   'ai.attachTip': 'Attach image',
   'ai.removeImageTip': 'Remove image',
   'ai.imageAlt': 'Attached image',
-  'ai.webSearchOffTip': 'Web search is closed — click to allow searching when you ask for it',
-  'ai.webSearchAskTip':
-    'Web search on request — the assistant only searches when your message asks for it. Click for always on.',
-  'ai.webSearchOnTip': 'Web search is on — the assistant searches the web when needed. Click to close.',
+  'ai.webSearchOffTip': 'Web search is off — click to give the assistant web search when a question needs it',
+  'ai.webSearchOnTip':
+    'Web search is on — the assistant searches the web when the question calls for it, outright or by implication, never because the document says so. Click to turn off.',
   'ai.quickQuestion': '{title}: «{selection}» (p. {page})',
   'ai.mockOnlyWeb': 'The browser preview only supports the mock provider. Use the app for real AI.',
   'ai.calloutMock':
@@ -2025,6 +2424,7 @@ const en: Dict = {
   'ai.calloutNoText':
     'This document has no text to read — its pages are images (scanned). The assistant cannot search the text or read the whole document on its own, but it can read the pages you attach as images. “Explain area” works too: drag a box around a figure and the image is sent.',
   'ai.readPagesFrom': 'From page',
+  'ai.ocrReading': 'The pages are scanned, so their text is first read on this computer: {done} of {total} pages.',
   'ai.readPagesTo': 'to',
   'ai.readPagesCta': 'Attach the pages',
   'ai.readPagesBusy': 'Rendering …',
@@ -2036,9 +2436,66 @@ const en: Dict = {
   'ai.removePagesTip': 'Remove the pages',
   'ai.aborted': 'Stopped',
   'ai.newChatTip': 'New conversation',
-  'ai.historyTip': 'Conversation history for this document',
+  'ai.historyTip': 'Conversation history',
   'ai.historyTitle': 'Previous conversations',
   'ai.historyEmpty': 'No previous conversations for this document.',
+  'ai.historyEmptyAll': 'No previous conversations.',
+  'ai.historySearch': 'Search the conversations',
+  'ai.historyAllDocs': 'All documents',
+  'ai.historyNoHits': 'No conversations match the search.',
+  'ai.historyOpenElsewhereTip': 'Open the document on this conversation',
+  'ai.imagesWithheld': 'Images not kept ({count})',
+  'lib.tab': 'Conversations',
+  'lib.tidy': 'Tidy up and export',
+  'lib.totals': '{conversations} conversations about {documents} documents',
+  'lib.totalsImages': '{size} of images',
+  'lib.empty': 'No conversations yet. The conversations you have with the assistant about a document gather here.',
+  'lib.back': 'All conversations',
+  'lib.openInDoc': 'Open in the document',
+  'lib.gone': 'Documents that no longer exist',
+  'lib.goneChecking': 'Looking for the files …',
+  'lib.goneNone': 'Every document is still there',
+  'lib.goneCount': '{documents} documents, {conversations} conversations',
+  'lib.goneHint': 'Forgets everything about them: conversations, reading position, bookmarks and the entry in "Recently read". Unsaved annotations are left alone.',
+  'lib.forget': 'Forget',
+  'lib.older': 'Older than',
+  'lib.ageMonths': '{n} months',
+  'lib.ageYears': '{n} years',
+  'lib.keep': 'Keep only the newest',
+  'lib.images': 'Remove images, keep the text',
+  'lib.imagesCount': '{images} images in {conversations} conversations · {size}',
+  'lib.count': '{conversations} conversations about {documents} documents',
+  'lib.none': 'None',
+  'lib.delete': 'Delete',
+  'lib.remove': 'Remove',
+  'lib.confirmDelete': 'Deletes {conversations} conversations about {documents} documents. This cannot be undone.',
+  'lib.confirmImages': 'Removes {images} images from {conversations} conversations. Questions and answers are kept. This cannot be undone.',
+  'lib.confirmForget': 'Forgets everything about {documents} documents that no longer exist. This cannot be undone.',
+  'lib.deleted': '{conversations} conversations deleted',
+  'lib.imagesRemoved': '{images} images removed',
+  'lib.forgotten': '{documents} documents forgotten',
+  'lib.export': 'Export all conversations',
+  'lib.exportHint': 'Markdown to read, JSON with everything',
+  'lib.exportTitle': 'Conversations from PDF Scholar',
+  'lib.exportFileName': 'PDF Scholar conversations',
+  'lib.exported': 'Saved as {name}',
+  'lib.fileMissing': 'File not found',
+  'lib.fileMissingTip': 'The document is no longer where the conversation took place. Move it back, or open it from its new place, and the conversations follow.',
+  'lib.custom': 'Custom …',
+  'lib.customMonths': 'Number of months',
+  'lib.months': 'months',
+  'lib.customCount': 'Number of conversations to keep',
+  'lib.sort': 'Sort',
+  'lib.sort_updated': 'Last changed',
+  'lib.sort_created': 'Created',
+  'lib.sort_name': 'Document A–Z',
+  'lib.sort_messages': 'Most messages',
+  'lib.filters': 'Filters',
+  'lib.filterDocClear': 'Show every document',
+  'lib.filterMissing': 'File missing',
+  'lib.filterImages': 'With images',
+  'lib.showConversations': 'Show conversations',
+  'lib.badge': '{count} conversations',
   'ai.historyDeleteTip': 'Delete conversation',
   'ai.historyMessages': '{count} messages',
   'ai.jumpNewestTip': 'Jump to newest message',
@@ -2047,6 +2504,8 @@ const en: Dict = {
   'ai.copyMdDone': 'Copied',
   'ai.exportYou': 'You',
   'ai.exportAssistant': 'Assistant',
+  'ai.exportPassages': 'Cited passages:',
+  'ai.exportPassage': '{marker} “{text}”',
 
   'keys.title': 'Keyboard shortcuts',
   'keys.intro':
@@ -2102,9 +2561,14 @@ const en: Dict = {
   'keys.tabPrev': 'Previous tab',
   'keys.tabClose': 'Close tab',
   'keys.tabReopen': 'Reopen last closed tab',
+  'keys.tabDuplicate': 'Duplicate tab',
   'keys.tabMoveLeft': 'Move tab left',
   'keys.tabMoveRight': 'Move tab right',
   'keys.tabPin': 'Pin or unpin tab',
+  'keys.tabSearch': 'Search open tabs',
+  'keys.tabGoto': 'Go to tab {n}',
+  'keys.tabLast': 'Go to last tab',
+  'keys.copyPath': "Copy the document's path",
 
   'keys.navBack': 'Back (after a link jump)',
   'keys.navForward': 'Forward again',
@@ -2161,6 +2625,7 @@ const en: Dict = {
   'keys.toolArrow': 'Arrow',
   'keys.toolSignature': 'Signature',
   'keys.toolSnip': 'Explain area',
+  'keys.navHand': 'Hand tool',
 
   'update.available': 'New version available',
   'update.availableBody': 'PDF Scholar {version} is ready to download.',
@@ -2205,9 +2670,11 @@ export function resolveLanguage(pref: LanguagePreference): Lang {
 }
 
 let current: Lang = 'nb'
+let currentPreference: LanguagePreference = 'auto'
 const listeners = new Set<() => void>()
 
 export function setLanguage(pref: LanguagePreference): void {
+  currentPreference = pref
   const next = resolveLanguage(pref)
   if (next === current) return
   current = next
@@ -2216,6 +2683,36 @@ export function setLanguage(pref: LanguagePreference): void {
 
 export function getLanguage(): Lang {
   return current
+}
+
+/** The language SETTING behind getLanguage(): whether the interface language
+ *  was chosen or followed the system («auto»). The AI's default answer
+ *  language tells the two apart (shared/answer-language.ts). */
+export function getLanguagePreference(): LanguagePreference {
+  return currentPreference
+}
+
+// The system's preferred languages, most preferred first. The browser's list
+// until the platform says otherwise: main.tsx hands over
+// bridge.systemLanguages(), which on desktop is the OS's own list — it names a
+// language Chromium has no translation for, where navigator.language already
+// reads en-US. The extension keeps the browser's list, which is all its
+// bridge could answer. Only the AI's default answer language reads it.
+let systemLanguageList: readonly string[] =
+  typeof navigator === 'undefined'
+    ? []
+    : navigator.languages?.length
+      ? [...navigator.languages]
+      : navigator.language
+        ? [navigator.language]
+        : []
+
+export function setSystemLanguages(list: readonly string[]): void {
+  if (Array.isArray(list) && list.length) systemLanguageList = [...list]
+}
+
+export function getSystemLanguages(): readonly string[] {
+  return systemLanguageList
 }
 
 /** Subscribe a component to language changes (needed because several
@@ -2267,6 +2764,7 @@ export function errorText(e: FileError): string {
   if (isAbstractErrorCode(e.code)) return t(`abserr.${e.code}`)
   if (isAttachmentErrorCode(e.code)) return t(`atterr.${e.code}`)
   if (isFileIconErrorCode(e.code)) return t(`iconerr.${e.code}`)
+  if (isMcpErrorCode(e.code)) return t(`mcperr.${e.code}`)
   return t(`engine.${e.code}`)
 }
 
@@ -2282,7 +2780,8 @@ const PROVIDER_SENTENCE_CODES = new Set<string>([
   'ai-model-overloaded',
   'ai-no-credit',
   'ai-subscription-limit',
-  'ai-chatgpt-login-failed'
+  'ai-chatgpt-login-failed',
+  'ai-chatgpt-host-failed'
 ])
 
 /** The provider's raw sentence for a failure, when there is one worth reading
@@ -2312,6 +2811,8 @@ const isAiErrorCode = (code: NonNullable<FileError['code']>): code is AiErrorCod
 const isFileIconErrorCode = (
   code: NonNullable<FileError['code']>
 ): code is FileIconErrorCode => code.startsWith('file-icon-')
+
+const isMcpErrorCode = (code: NonNullable<FileError['code']>): code is McpErrorCode => code.startsWith('mcp-')
 
 const isExtensionErrorCode = (
   code: NonNullable<FileError['code']>

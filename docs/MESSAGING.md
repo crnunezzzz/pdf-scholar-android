@@ -43,9 +43,9 @@ When a claim here depends on a platform detail, PLATFORMS is the authority.
 | Windows | Tier 1. One installer carries x64 and native arm64; per-user install, no admin rights. Also on the **Microsoft Store**, `9N75CPC0G9M2` (live). A **portable zip** per arch ships with every GitHub release (issue #17, 2026-09-08) as a secondary offer: named in the release table, in small print in the README and on the landing page, never on the stores. Say what it costs — no «Åpne med» registration, updates are noticed but not installed, AI keys stay bound to the Windows account — and where its state lives (a `data` folder beside the exe) |
 | macOS | **Presented alongside Windows, no beta label** (Emil, 2026-08-11 — it has run on real Apple hardware since v0.34.0). Built in CI, feature-identical by construction. Tested on a tester's machine, not the owner's — say "tested", never "verified by the owner". The build is unsigned (Gatekeeper workaround in the README) and cannot *install* an update itself; it does **notice** one and tell you how to get it, which is not the same claim — never write that macOS auto-updates. The recommended install is the Homebrew tap — `brew install --cask emilmsh/tap/pdf-scholar` — which makes `brew upgrade` the update channel, and the in-app notice hands you that exact command. The Gatekeeper `xattr` step still applies after every install/upgrade (Homebrew ≥ 5 removed `--no-quarantine`) — never claim brew skips it |
 | Linux | **Beta.** Built in CI, feature-identical by construction, but it has not run on real hardware and no surface may imply otherwise. **Say why, and ask for help** (Emil, 2026-09-04): the author develops on Windows and has no Linux machine, so the build is untested there and reports from Linux users are wanted. State the reason plainly — it is the honest version of the beta label, not an apology — and pair it with the issue tracker. It carries no weight on the store surfaces (neither store sells the Linux build); the README says it in the Linux section, the landing page in the small print under the download buttons |
-| Browser extension | **Beta — and live in BOTH stores** (confirmed 2026-08-12). Edge Add-ons: `https://microsoftedge.microsoft.com/addons/detail/pdf-scholar/jdmemepojgjhflpeckiiciibnhmbdjcc`. Chrome Web Store: `https://chromewebstore.google.com/detail/pdf-scholar/jhhlaaiegmdmjeeiopmdmoiidnbbhbmd`. One click, self-updating — this is the install to lead with, and the Load-unpacked route is now only for running a build newer than the stores carry. **Both listings lag the current release** while their updates sit in review, so never name a version on a store surface |
+| Browser extension | **Presented alongside the desktop app, no beta label** (Emil, 2026-10-24 — it is his own daily route into PDFs, with Edge as the default handler, and has been in both stores since August). **Live in BOTH stores** (confirmed 2026-08-12). Edge Add-ons: `https://microsoftedge.microsoft.com/addons/detail/pdf-scholar/jdmemepojgjhflpeckiiciibnhmbdjcc`. Chrome Web Store: `https://chromewebstore.google.com/detail/pdf-scholar/jhhlaaiegmdmjeeiopmdmoiidnbbhbmd`. One click, self-updating — this is the install to lead with, and the Load-unpacked route is now only for running a build newer than the stores carry. **Both listings lag the current release** while their updates sit in review, so never name a version on a store surface |
 | Engine | pdf.js renders, PDFium (EmbedPDF) writes the annotations. Say this only where it earns its place — the README and the landing footer |
-| AI | Optional, bring your own key: Anthropic, OpenAI, Azure OpenAI, OpenRouter, Google Gemini, Grok (xAI), Mistral, Groq (one key field each) — or any OpenAI-compatible endpoint, including local models via Ollama/LM Studio (no key needed for local). **Desktop only:** sign in with a ChatGPT Plus/Pro plan instead of a key, so the assistant runs on the plan's allowance with no API bill (v0.53.0). Always say it is **unofficial** — the same sign-in Codex and opencode use, which OpenAI allows today but runs no program for — and that **ChatGPT's terms** apply rather than the API's. Never in the extension listing (the extension cannot do it, PLATFORMS §25), and never in a store DESCRIPTION — a standing claim is no place to lean on a door OpenAI can close. The Microsoft Store's version-stamped «What's new» may name it, with both caveats, since that build carries it (v0.53.0). No server of ours in between |
+| AI | Optional, bring your own key: Anthropic, OpenAI, Azure OpenAI, OpenRouter, Google Gemini, Grok (xAI), Mistral, Groq (one key field each) — or any OpenAI-compatible endpoint, including local models via Ollama/LM Studio (no key needed for local). Sign in with a ChatGPT Plus/Pro plan instead of a key, so the assistant runs on the plan's allowance with no API bill — the sign-in happens in the desktop app (v0.53.0), and the extension borrows it from an installed, signed-in desktop app (PLATFORMS §25; say «with the desktop app installed», never that the extension signs in). Always say it is **unofficial** — the same sign-in Codex and opencode use, which OpenAI allows today but runs no program for — and that **ChatGPT's terms** apply rather than the API's. Never in a store DESCRIPTION, the extension's included — a standing claim is no place to lean on a door OpenAI can close. The Microsoft Store's version-stamped «What's new» may name it, with both caveats, since that build carries it (v0.53.0). No server of ours in between |
 | Zotero | Works as Zotero's external PDF reader (Zotero 7+, its "Open PDFs using" setting). A document living in a Zotero library gets a Zotero section in the save menu — show the item in Zotero, copy an in-text citation, a full reference (APA), or the BibTeX entry, fetched from Zotero's **local** API on the same machine. BibTeX comes from the translator that ships with Zotero — Better BibTeX is not needed, and its citation keys are Zotero's own generated ones, not BBT's pinned ones. Two fields are stripped before the entry reaches the clipboard: `file` (the attachment's absolute path on that machine — local disk layout nobody meant to publish) and `abstract` (several hundred words that belong in the library, not in a .bib) (2026-09-03) (no account, no network; the user enables the API once in Zotero's Advanced settings). Annotations saved into the file are standard PDF annots, which Zotero's own «Import Annotations…» adopts — highlights and underlines; text boxes and ink are not importable on Zotero's side, and that boundary is Zotero's to claim, not ours to hide. Importing MOVES them (Zotero strips the file and keeps them in its database — verified 2026-09-02); the guide says so plainly and advises skipping the import in a PDF-Scholar-first workflow. Covers stored AND linked attachments: a stored file is recognised by its path alone; a linked file (ZotFile-style libraries, a base folder on a synced drive — Emil's own setup) by asking the local API for the library's attachment list and matching the filename, so it shows its Zotero section only while Zotero runs with the API on (2026-09-03; v0.44.0 showed linked libraries nothing). **DOI reserve** (2026-09-07, after a reader pointed at RefRunner as a DOI-based formatter): a document with no resolved Zotero record whose first pages or metadata carry a DOI gets a «Reference» section instead — the DOI shown, one click fetches the APA reference and BibTeX from doi.org (Crossref/DataCite content negotiation, the same data a citation manager would import; the in-text form is APA's rule applied from the CSL fields). Explicitly a click and never automatic: it is the app's one network call outside the AI providers and the update check, and the row names doi.org. Zotero wins whenever it has the item — the library's corrected metadata beats a publisher's deposit — so the two sections never show a citation for the same document at once. **Style picker** (2026-09-07): one setting for both sources, in the section that holds the citation — eight curated CSL styles Zotero 7 ships and the CSL repository carries by the same id (APA 7, Chicago author-date and notes, Harvard Cite Them Right, IEEE, MLA 9, Nature, Vancouver). The in-text form for a DOI-cited document is derived per style family; numeric and note styles leave that row disabled rather than invent a number |
 | Extension takeover | The extension opens PDFs from the web in its own tab instead of the browser's built-in reader — and that half can be switched off in the gear menu («Åpne PDF-er fra nettet her»), so a browser set to download PDFs keeps doing so; local files still open here. Added 2026-09-07 after issue #16: PDF Scholar is a reader and does not manage local folders or files — the browser and the OS already remember the last save folder, and auto-saving what the viewer shows was declined as a concept |
 | Author | Emil Mathias Strøm Halseth, who reads PDFs for a living — full name wherever he is credited. Where the author is named in long form (README footer, landing footer), the approved signature is verbatim: "Built by Emil Mathias Strøm Halseth, who reads PDFs for a living, with assistance from Claude Code." (Emil's wording, 2026-08-04 — no stronger Claude credit than "assistance".) The store copyright line stays author-only |
@@ -137,9 +137,11 @@ carries no picture of its own.)*
   before; an own picture is any square image of 16 px or more *(Emil,
   2026-10-09)*
 - Four reading modes — Day, «Farge» (a light paper tone: the classic Sepia
-  cream plus gray, green, blue and sand), Night and Night+ (higher contrast) —
+  cream plus gray, green, blue, sand or a tint of the reader's own), Night and
+  Night+ (higher contrast) —
   plus Auto, which follows the system setting. Night has its own dark tones
-  (the standard near-black, gray, blue, green) — and «Hvitt», which leaves the
+  (the standard near-black, gray, blue, green, or a tint of the reader's own,
+  held dark enough to read) — and «Hvitt», which leaves the
   document as printed: a white page inside the dark chrome, the way Edge's
   dark mode shows a PDF *(reader ask, 2026-10-04 — a PhD student who keeps
   every app dark and every document white)*. The tinted modes take a strength slider — tint
@@ -192,7 +194,11 @@ carries no picture of its own.)*
   the tabs it had at the next launch, each document read only when its tab is
   first shown, so a long session costs nothing at startup *([issue #29](https://github.com/emilmsh/pdf-scholar/issues/29);
   the browser extension has no tab strip of its own — there the browser pins
-  and restores its tabs)*. A tab drags like a file: into another PDF Scholar window,
+  and restores its tabs)*. A tab can be duplicated — «Dupliser fane» in the tab
+  menu, or Ctrl+Shift+K — for a second tab on the same document, on the page
+  the first one stands on; a mark made in either shows in both *([issue #53](https://github.com/emilmsh/pdf-scholar/issues/53),
+  a reader's Edge habit; in the extension the browser duplicates its own tab)*.
+  A tab drags like a file: into another PDF Scholar window,
   or into anything that takes a PDF — a browser's upload field, an e-mail, a
   chat, a folder. «Flytt til nytt vindu» in the tab menu tears it into a
   window of its own *(2026-09-17, Emil's ask: dragging a tab into another
@@ -227,17 +233,20 @@ carries no picture of its own.)*
 
 Rest the pointer on a citation, a figure, a table or an equation reference
 and a preview of what it points to opens beside the text, without moving the
-page (long-press on a touchscreen). A citation shows its reference entry, and
-only that; a citation written as a range («5–9») shows every entry in it. A
-figure, a table or an equation gets a window onto the page it is on: scroll
-it, Ctrl+wheel to rescale it, drag the corner to make it bigger. Click inside
-to go there, Ctrl+click to open it in the other column.
+page (long-press on a touchscreen). A citation shows its reference as text,
+the way Zotero's reader does — selectable, its DOI and web links live — and a
+bracketed citation like «[3, 5–9]» lists every reference in it, whichever of
+its numbers the pointer rests on. Each reference has «Go to» for its place in
+the list (Ctrl+click: the other column). A figure, a table or an equation gets
+a window onto the page it is on: scroll it, Ctrl+wheel to rescale it, drag the
+corner to make it bigger. Click inside to go there, Ctrl+click to open it in
+the other column.
 
 - On a citation, one click fetches the cited paper's abstract from free
   scholarly databases (arXiv, Europe PMC, Crossref, OpenAlex) — no key, no
-  account, and only on that click. It folds out under the entry and closes on
-  its own. In the reference list itself, select an entry and «Sammendrag» in
-  the selection menu does the same
+  account, and only on that click; each reference in a bracket has its own. It
+  folds out under its reference and closes on its own. In the reference list
+  itself, select an entry and «Sammendrag» in the selection menu does the same
 - Roughly two in three citations find an abstract; books, working papers and
   some paywalled journals often do not *(never promise it for every citation)*
 - «Forhåndsvis lenker» in the settings menu turns the previews off, or sets
@@ -251,7 +260,12 @@ a citation shows ONLY its entry, a figure a page window with a thin scrollbar
 and a corner grip, the abstract under the whole entry with its own cross; a
 sideways page is measured through its own transform. Its own section on Emil's
 ask the same day; its frame `link_preview` (a citation with the abstract
-unfolded, page 2) shot and approved the same evening.)*
+unfolded, page 2) shot and approved the same evening. Third round on
+2026-10-16: the citation became Zotero's card — the reporter preferred it to a
+rendered cut of the bibliography page, and Zotero's users are this app's
+readers — and a range is read from the line around the link, since a PDF
+links «[5» and «9]» rather than «5–9». The `link_preview` frame predates the
+card and needs shooting again.)*
 
 ### 2. Split view
 
@@ -333,7 +347,10 @@ kommentarene satt i en utvidet marg.
 - With a stylus, the pen draws while a finger scrolls and zooms; pen pressure
   varies the line width **(beta)** and is preserved in the saved file
 - The text tool uses the standard PDF typefaces — Helvetica, Times and Courier,
-  with bold and italic — chosen before typing or changed on an existing box.
+  with bold and italic — and a size, chosen before typing or changed on an
+  existing box *(the size on an existing box since [issue #53](https://github.com/emilmsh/pdf-scholar/issues/53), 2026-10-23;
+  before, it was a choice for the next box only. With the text tool armed, a
+  click on a box opens its menu beside the editor, as Edge does)*.
   Nothing is embedded in the file; the text remains searchable and renders
   identically in other readers. (Claim the fonts, never "any font": a typeface
   outside the standard fourteen would have to travel inside the document, and
@@ -345,7 +362,10 @@ kommentarene satt i en utvidet marg.
   surface may blur the two. Where a document already carries digital signatures
   the app reports them and states that it does not verify them.)*
 - Colour, thickness and opacity are set per tool and remembered between
-  sessions
+  sessions; your own colours come from a colour wheel behind «+», in the
+  selection menu and the toolbar's tool menus alike *(parity since
+  2026-10-24 — the wheel sat in the selection menu only, and the toolbar
+  offered the fixed row)*
 - Existing marks can be adjusted rather than redrawn: the ends of a highlight,
   the corner of a shape, text box or drawing
 - Comments in the margin: every note and comment as a visible card beside the
@@ -394,14 +414,24 @@ that.)*
   discuss it, ranked — stepped through with the same arrows as word hits,
   with the list kept open, since these are passages rather than exact
   matches. This mode uses the assistant's key
+- Scanned pages are searched too *(v0.69, 2026-10-23)*: a page that is only
+  a picture of text — a scan, a reprint, a photocopied chapter — is read by
+  text recognition on your own computer, and from then on its words can be
+  found, selected, copied, marked and asked about like any other page's.
+  The pages on screen are read first; a search reads the rest and shows the
+  hits as they come. Nothing is sent anywhere for this and nothing is written
+  into the file; the models cover English, Norwegian and Simplified Chinese.
+  *(Say "read on your computer", never "OCR" alone on a reader-facing surface;
+  and never promise a perfect read — now and then two short words come out
+  joined. The frame that carries this is `search_scan`.)*
 
 ### 5. The assistant
 
 **EN heading:** An assistant that cites its sources.
 **NO heading:** En assistent som oppgir kildene sine.
 
-- Optional, and it runs on your own API key — or, in the desktop app, on your
-  ChatGPT Plus/Pro plan *(README and landing page only; see the AI row in
+- Optional, and it runs on your own API key — or on your ChatGPT Plus/Pro plan,
+  signed in through the desktop app *(README and landing page only; see the AI row in
   Facts for the two caveats that must travel with it)*
 - Answers cite their sources: each claim carries a reference, and following it
   goes to the passage the claim came from
@@ -414,8 +444,52 @@ that.)*
   cropping in general; PRIVACY.md states the sending rules and copy must not
   exceed it.)*
 - Questions about your own annotations ("summarize what I've highlighted")
-- Scanned documents are identified as such rather than answered about blindly;
-  a page range can be attached as images instead
+- A scanned document is read the same way *(v0.69)*: the assistant gets the
+  recognised text of the whole document, with clickable citations like any
+  other PDF, instead of only the pages you attach as images — and the panel
+  says so while the pages are being read. *(Until 2026-10-23 the claim was
+  "identified as such rather than answered about blindly"; that sentence is
+  now false and must not survive anywhere.)*
+- Conversations are kept *(issue #46, 2026-10-23)*: every conversation is
+  stored with its document, the library's «Conversations» view lists them
+  across documents — searchable, sorted and filtered, each citation chip
+  opening the passage it came from — and an earlier conversation, about this
+  paper or another, can be attached to a new question as context, chosen by
+  you. A document moved or renamed keeps its conversations; the library can
+  tidy old ones in one go, and export them. *(The conversations of a
+  password-protected document are stored without their images.)*
+- One paperclip in the composer attaches context to a question *(2026-10-24,
+  Emil's call — it replaced the «Samtaler» button and the chips that sat in
+  the text field)*: an earlier conversation, an image, or a local file — a
+  PDF or a text file (Markdown, CSV, JSON, LaTeX, BibTeX …) — whose text
+  goes along as notes beside the document. A badge counts what is attached
+  and the list shows it, each item removable. The open document stays the
+  only source the assistant cites *(a file's text rides in the same system
+  block as conversations, capped, and «Bekreft før deling» names it before
+  it leaves; PRIVACY.md states this)*
+- Your notes reach the AI tools you work in *(2026-10-29, Emil: Claude Code
+  and ChatGPT should find what was noted and asked about a paper without
+  reading it again)*: Claude and Codex are each one switch under «AI tools»
+  in the settings menu; other tools that support MCP take one config entry
+  the app copies for you ([`MCP.md`](MCP.md)). They can then search your
+  highlights (with the words marked), comments and assistant conversations
+  across every paper — never the PDFs, never images, never where a file
+  lives, nothing of a password-protected document. Every switch is off until
+  you turn it on, the same switch takes it back, and a document or a whole
+  folder can be kept out in the same place. «Copy for AI» in the
+  Annotations tab puts one document's notes and conversations on the
+  clipboard for a tool that cannot connect. *(Nothing to download: the
+  server is the desktop app itself — say so, it is the first question. The
+  connection is desktop-only and not in the Microsoft Store build, PLATFORMS
+  §33; the copy works everywhere. Name only the tools that have a switch of
+  their own — Claude and Codex, whose config the app writes itself — and
+  call the rest «other tools that support MCP» (Emil, 2026-10-29: there are
+  many tools, and none is named that we have not checked can use it). Never
+  "integrates with ChatGPT": in the ChatGPT app only Codex reaches it, an
+  ordinary chat runs in OpenAI's cloud and cannot start a local server
+  (checked 2026-10-29 — re-check in the monthly audit; the README and
+  MCP.md say so, the dialog's Codex line reads «Codex (ikke chat)»). The
+  extension listing names no tool and claims only the copy.)*
 - The assistant can open in its own window, so the document keeps the whole
   screen; a citation click still goes to the passage in the window showing the
   document. *(The extension opens a separate tab instead — say "window" only
@@ -423,7 +497,11 @@ that.)*
 - The answer text has its own size control (80–160 %), separate from the
   document's zoom. *(README only — at listing length this is trivia.)*
 - Optional web search, off by default (Anthropic and OpenAI only — the toggle
-  does not appear elsewhere)
+  does not appear elsewhere). One switch since 2026-10-24: on means the tool
+  is there and the model searches when the question calls for it, outright or
+  by implication, and never because the document says so *(Emil: the earlier
+  three-way «closed / on request / always» read as confusing; «the way ChatGPT
+  does it» is the reference. Never claim "always searches".)*
 - LaTeX in answers is rendered
 - Providers: Anthropic (Claude), OpenAI, Azure OpenAI, OpenRouter, Google
   Gemini, Grok (xAI), Mistral and Groq — one key field each, entered once —
@@ -483,6 +561,13 @@ app looks like.)*
   blocks every AI request in the transport layer, so a stored key cannot leak
   content by accident
 - With a local model (Ollama, LM Studio), questions also stay on the machine
+- An AI tool you turn on (Claude Code, Claude Desktop, Codex, …) reads your
+  notes and conversations through a read-only server on your own machine, and
+  what it reads goes to that tool's provider under its terms; nothing is
+  shared until you turn a tool on, its switch takes it back at once, a
+  document or folder can be kept out, and no file path ever leaves
+  *(PRIVACY.md, «AI tools on your computer»; the switches are separate from
+  AI access, which governs the app's own assistant — Emil, 2026-10-29)*
 - The key is stored in the platform's own key store; the exact mode differs per
   platform and the settings panel names the one in force. See "Wording we do not
   use" below before writing anything shorter than that
@@ -541,7 +626,13 @@ app looks like.)*
   beta label (Emil, 2026-08-11) — it has been tested on Apple hardware since
   v0.34.0, and "tested" remains the strongest word on offer; never "verified",
   "stable" or anything that promises the owner stands behind the build day to
-  day.
+  day. The browser extension lost its beta label on 2026-10-24 (Emil's call);
+  Linux is now the only beta platform.
+- **Padding.** The README is the full account, not the long one: every claim
+  it makes earns its place, but each is made once and in as few words as it
+  takes (Emil, 2026-10-24: "say the same in somewhat fewer words", and write
+  like a developer). A clause that restates the sentence, a second example
+  where one suffices, a parenthetical the reader can infer — cut.
 - **A third macOS install path, or Gatekeeper explained twice.** Every surface
   offers at most two ways in — Homebrew and by hand — sharing one explanation
   of what the unsigned build costs (one `xattr` per version, no self-update).

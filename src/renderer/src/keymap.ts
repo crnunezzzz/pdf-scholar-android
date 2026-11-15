@@ -20,7 +20,7 @@
 // either platform — the same reason platform.ts exists.
 import { isMac } from './platform'
 import { READ_ALOUD } from './flags'
-import type { MsgKey } from './i18n'
+import { t, type MsgKey } from './i18n'
 
 /** Command ids are the stable keys a stored keymap is written against — they
  *  outlive labels and defaults, so renaming one silently drops the user's
@@ -37,9 +37,21 @@ export type CommandId =
   | 'tab.prev'
   | 'tab.close'
   | 'tab.reopen'
+  | 'tab.duplicate'
   | 'tab.moveLeft'
   | 'tab.moveRight'
   | 'tab.pin'
+  | 'tab.search'
+  | 'tab.goto1'
+  | 'tab.goto2'
+  | 'tab.goto3'
+  | 'tab.goto4'
+  | 'tab.goto5'
+  | 'tab.goto6'
+  | 'tab.goto7'
+  | 'tab.goto8'
+  | 'tab.last'
+  | 'doc.copyPath'
   // Navigation
   | 'nav.back'
   | 'nav.forward'
@@ -96,6 +108,7 @@ export type CommandId =
   | 'tool.arrow'
   | 'tool.signature'
   | 'tool.snip'
+  | 'nav.hand'
 
 export type CategoryId =
   | 'file'
@@ -123,6 +136,13 @@ export interface Command {
   whileTyping?: boolean
   /** Hidden unless the feature flag is on (read-aloud, see flags.ts) */
   flagged?: boolean
+  /** Filled into the label — «Gå til fane {n}» is eight rows, one string */
+  labelVars?: Record<string, number>
+}
+
+/** A command's name as the map and its messages show it */
+export function commandLabel(c: Command): string {
+  return t(c.labelKey, c.labelVars)
 }
 
 export const CATEGORY_LABELS: Record<CategoryId, MsgKey> = {
@@ -154,7 +174,10 @@ export const CATEGORY_ORDER: readonly CategoryId[] = [
  *  not have to relearn it because the list moved house. */
 const REGISTRY: readonly Command[] = [
   // ---------- File ----------
-  { id: 'file.open', category: 'file', labelKey: 'keys.fileOpen', defaults: ['mod+o'], whileTyping: true },
+  // Ctrl+N too (Emil, 2026-10-24): the «+» in the tab strip opens a file, and
+  // «new» in this app means a new document, not a new window — that one
+  // keeps Ctrl+Shift+N, the browsers' chord for it
+  { id: 'file.open', category: 'file', labelKey: 'keys.fileOpen', defaults: ['mod+o', 'mod+n'], whileTyping: true },
   { id: 'file.save', category: 'file', labelKey: 'keys.fileSave', defaults: ['mod+s'], whileTyping: true },
   // Both were shipped unbound, which the keyboard map made visible the moment
   // it was photographed (Emil, 2026-08-09). The fourteen TOOL commands below
@@ -177,11 +200,35 @@ const REGISTRY: readonly Command[] = [
   // recently comes back, and when nothing was closed this session, the most
   // recent file not on screen — what the library would list first.
   { id: 'tab.reopen', category: 'tabs', labelKey: 'keys.tabReopen', defaults: ['mod+shift+t'], whileTyping: true },
+  // Edge's chord for its «Duplicate tab» (issue #53): a second tab on the
+  // same document, at the place the first one stands
+  { id: 'tab.duplicate', category: 'tabs', labelKey: 'keys.tabDuplicate', defaults: ['mod+shift+k'], whileTyping: true },
   { id: 'tab.moveLeft', category: 'tabs', labelKey: 'keys.tabMoveLeft', defaults: ['mod+shift+pageup'], whileTyping: true },
   { id: 'tab.moveRight', category: 'tabs', labelKey: 'keys.tabMoveRight', defaults: ['mod+shift+pagedown'], whileTyping: true },
   // Unbound, like the browsers: pinning is rare enough that a key would only
   // be one more to press by accident — the map lets a reader give it one
   { id: 'tab.pin', category: 'tabs', labelKey: 'keys.tabPin', defaults: [], whileTyping: true },
+  // Chrome's and Edge's chord for their tab search (Emil, 2026-10-28): with
+  // thirty documents open, typing three letters of the one you want beats
+  // reading a strip of «Hortacs…». Opens «Alle faner» with the caret in it.
+  { id: 'tab.search', category: 'tabs', labelKey: 'keys.tabSearch', defaults: ['mod+shift+a'], whileTyping: true },
+  // The browsers' numbered tabs: Ctrl+1–8 the tab at that place, Ctrl+9 the
+  // LAST one, however many there are
+  ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(
+    (n): Command => ({
+      id: `tab.goto${n}`,
+      category: 'tabs',
+      labelKey: 'keys.tabGoto',
+      labelVars: { n },
+      defaults: [`mod+${n}`],
+      whileTyping: true
+    })
+  ),
+  { id: 'tab.last', category: 'tabs', labelKey: 'keys.tabLast', defaults: ['mod+9'], whileTyping: true },
+  // The open document's path to the clipboard — the tab menu's «Kopier sti»
+  // without the menu (Emil, 2026-10-28). Desktop only in practice: in Edge
+  // and Chrome the chord is the browser's own element picker.
+  { id: 'doc.copyPath', category: 'file', labelKey: 'keys.copyPath', defaults: ['mod+shift+c'], whileTyping: true },
 
   // ---------- Navigation ----------
   { id: 'nav.back', category: 'nav', labelKey: 'keys.navBack', defaults: ['alt+arrowleft'] },
@@ -197,6 +244,10 @@ const REGISTRY: readonly Command[] = [
   // in some other field is exactly when you want to jump to the page box.
   { id: 'nav.gotoPage', category: 'nav', labelKey: 'keys.navGotoPage', defaults: ['mod+g'], whileTyping: true },
   { id: 'doc.bookmark', category: 'nav', labelKey: 'keys.docBookmark', defaults: ['b'] },
+  // The hand tool (issue #44): a toggle, so one press arms it and the next
+  // puts it down. Unbound as shipped — «h», the key every other reader
+  // uses for it, already hides annotations here.
+  { id: 'nav.hand', category: 'nav', labelKey: 'keys.navHand', defaults: [] },
 
   // ---------- View ----------
   { id: 'view.fullscreen', category: 'view', labelKey: 'keys.viewFullscreen', defaults: ['f11', 'f'], whileTyping: true },
@@ -210,10 +261,10 @@ const REGISTRY: readonly Command[] = [
   // Split-view companion: the two columns trade sides (a visual order flip).
   // Shift+S so it reads as "the other S" — does nothing without a split.
   { id: 'view.swapPanes', category: 'view', labelKey: 'keys.viewSwapPanes', defaults: ['shift+s'] },
-  // Unbound as shipped, like the tools: the margin view arrived after the
-  // reading letters were spoken for, and 'm' is the kind of key a reader should
-  // get to spend themselves.
-  { id: 'view.marginNotes', category: 'view', labelKey: 'keys.viewMarginNotes', defaults: [] },
+  // 'm' for margin (Emil, 2026-10-27): the view sat unbound and three clicks
+  // deep — the notes tab's switch — which is too far from the margin it
+  // governs, most of all with the toolbar hidden. 'm' was free.
+  { id: 'view.marginNotes', category: 'view', labelKey: 'keys.viewMarginNotes', defaults: ['m'] },
   { id: 'view.togglePin', category: 'view', labelKey: 'keys.viewTogglePin', defaults: ['v'] },
   // Cycles day→Farge→night→night+ (a reader-feature ask, 2026-09-02). 'd' was
   // free and reads as dag/dark in both languages; handled in App.tsx's shell

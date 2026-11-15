@@ -91,6 +91,7 @@ surface missing one it needs.
 | `tricolor` (composed) | hero | hero + `og:image` | 1 |
 | `annotations` | ✓ | ✓ | 2 |
 | `search_ai` | ✓ | ✓ | — (carries the search section) |
+| `search_scan` | ✓ | ✓ | — (scanned pages have text, v0.69; its own section on the landing page) |
 | `assistant` | ✓ | ✓ | 3 |
 | `assistant_figure` | ✓ | — | 4 |
 | `assistant_snip` | ✓ | — | — |
@@ -152,7 +153,13 @@ the current chrome — if the toolbar changes, re-measure rather than assume.
 
 The house demo document is "Attention Is All You Need" (arXiv 1706.03762) at
 `docs/screenshots/attention.pdf` — gitignored, never committed. Keep it free of
-saved annotations, or they turn up as clutter in unrelated shots.
+saved annotations, or they turn up as clutter in unrelated shots. The
+`search_scan` frame photographs a SCAN of it — four pages put back as nothing
+but images, leaning a hair (`scripts/lib/scan-pdf.mjs`) — which `shoot` builds
+into `_auto/attention-scan.pdf` on the first run that needs it and opens as a
+second tab through the single-instance route. Two tabs means the shoot's
+toolbar helpers look only in the ACTIVE tab's view; the first tab's toolbar
+stays mounted underneath and used to answer first.
 
 Being gitignored, it exists only in the checkout you put it in. `shoot` looks in
 this tree, then in the MAIN checkout (so a run from a git worktree finds it),
@@ -203,13 +210,14 @@ touches the extension — both drive Electron — and v0.27.1 shipped a broken
 recents-open there for exactly that reason. Running it here also leaves the
 sideloaded install on the version you are about to ship.
 
-**And press Print once.** Nothing automated can reach it: the print dialog is a
-system dialog, CI has neither a window nor a printer, and the whole path lives
-inside Chromium. That is how 0.49.0 shipped with a Print button that did
-nothing at all on Windows — not our code, but the Electron patch we happened to
-be pinned to (issue #22; CLAUDE.md § Version pins has the measurements). Open
-the save menu, choose «Skriv ut», and see the dialog. It costs ten seconds and
-it is the only thing standing between a runtime bump and a dead button.
+**Press Print once — only when Electron's MAJOR version changes** (43 → 44).
+Nothing automated can reach it: the print dialog is a system dialog and CI has
+neither a window nor a printer. 0.49.0 shipped with a Print button that did
+nothing on Windows (issue #22), but that was not a bump: the lockfile had sat on
+the broken 43.1.0 since the first commit, and the floor in package.json now
+keeps a fresh install off it (CLAUDE.md § Version pins). A patch or minor bump
+is not a reason to ask (Emil, 2026-10-24). On a major bump: open the save menu,
+choose «Skriv ut», and see the dialog.
 
 ## 1b. Copy — `docs/MESSAGING.md` first
 
@@ -236,8 +244,28 @@ fallen three releases behind by v0.31.3). Commit as `vX.Y.Z: <one-line summary>`
 git tag -a vX.Y.Z -m "vX.Y.Z: <summary>" && git push origin master --follow-tags
 ```
 
-The tag triggers `.github/workflows/release.yml`: builds Windows, macOS and Linux
-plus the extension zips, and creates a **draft** release. Nothing is public yet.
+**Tag together with the push — do not wait for CI first** (2026-10-24). The
+release workflow runs the whole test battery itself (the same list CI runs,
+one composite action in `.github/actions/test-battery`), so the release build
+is a complete gate on its own; waiting for a green CI run before tagging was
+six minutes spent testing the same commit twice. The step-1 checks above are
+the hand gate; the push is the machine gate.
+
+The tag triggers `.github/workflows/release.yml`: it creates an empty **draft**
+release at once, builds Windows, macOS and Linux plus the extension zips, each
+build uploading its own files straight into the draft, and a last job counts
+the twelve assets. Nothing is public yet. **A red release build** leaves a
+draft nobody can see: delete the draft and the tag, fix forward, tag again —
+
+```bash
+gh release delete vX.Y.Z --yes && git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z
+```
+
+(v0.60.0, 2026-10-10, was left as an orphan tag because moving a tag was
+refused mid-session; deleting an unpublished one is the clean version of the
+same fix — nothing has seen it: electron-updater and the tap only ever read
+PUBLISHED releases.) A single failed build job can instead be re-run from the
+Actions tab; its upload step clobbers its own files.
 
 ## 3. Publish the draft
 

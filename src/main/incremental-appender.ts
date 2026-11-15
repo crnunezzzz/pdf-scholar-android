@@ -25,6 +25,7 @@ import type {
   SetFormFieldRequest
 } from '../shared/types'
 import { ENGINE_ERRORS } from '../shared/engine-errors'
+import { freetextFaceMetrics, standardTextWidth } from '../shared/freetext-layout'
 import { decodePressures, encodePressures, pressureHalfWidths, strokeOutline } from '../shared/ink-outline'
 import { noteIconApContent } from '../shared/note-icon'
 
@@ -1065,69 +1066,55 @@ function winAnsiLiteral(s: string): string {
  *  Only the twelve text faces exist here — Symbol and ZapfDingbats are never
  *  offered by the text tool (see TEXT_FONT_FAMILIES). An unknown value falls
  *  back to Helvetica rather than writing a /BaseFont no reader knows. */
-const STANDARD_FACES: Record<number, { res: string; base: string; mono: boolean }> = {
-  0: { res: 'Cour', base: 'Courier', mono: true },
-  1: { res: 'CourB', base: 'Courier-Bold', mono: true },
-  2: { res: 'CourBI', base: 'Courier-BoldOblique', mono: true },
-  3: { res: 'CourI', base: 'Courier-Oblique', mono: true },
-  4: { res: 'Helv', base: 'Helvetica', mono: false },
-  5: { res: 'HelvB', base: 'Helvetica-Bold', mono: false },
-  6: { res: 'HelvBI', base: 'Helvetica-BoldOblique', mono: false },
-  7: { res: 'HelvI', base: 'Helvetica-Oblique', mono: false },
-  8: { res: 'Times', base: 'Times-Roman', mono: false },
-  9: { res: 'TimesB', base: 'Times-Bold', mono: false },
-  10: { res: 'TimesBI', base: 'Times-BoldItalic', mono: false },
-  11: { res: 'TimesI', base: 'Times-Italic', mono: false }
+const STANDARD_FACES: Record<number, { res: string; base: string }> = {
+  0: { res: 'Cour', base: 'Courier' },
+  1: { res: 'CourB', base: 'Courier-Bold' },
+  2: { res: 'CourBI', base: 'Courier-BoldOblique' },
+  3: { res: 'CourI', base: 'Courier-Oblique' },
+  4: { res: 'Helv', base: 'Helvetica' },
+  5: { res: 'HelvB', base: 'Helvetica-Bold' },
+  6: { res: 'HelvBI', base: 'Helvetica-BoldOblique' },
+  7: { res: 'HelvI', base: 'Helvetica-Oblique' },
+  8: { res: 'Times', base: 'Times-Roman' },
+  9: { res: 'TimesB', base: 'Times-Bold' },
+  10: { res: 'TimesBI', base: 'Times-BoldItalic' },
+  11: { res: 'TimesI', base: 'Times-Italic' }
 }
 
-const faceOf = (font: number | undefined): { res: string; base: string; mono: boolean } =>
+const faceOf = (font: number | undefined): { res: string; base: string } =>
   STANDARD_FACES[font ?? 4] ?? STANDARD_FACES[4]
 
-/** Every Courier glyph is 600/1000 — a monospaced face needs no table. */
-const COURIER_W = 600
-
-// Helvetica advance widths (per mille) for naive FreeText wrapping — WinAnsi
-// subset from the AFM. Only used to ESTIMATE line breaks; never written to
-// the file (base-14 font, no embedding). Unlisted chars fall back to 556.
-//
-// Also used for TIMES, deliberately: Times is narrower than Helvetica almost
-// everywhere, so estimating with these widths breaks a Times line EARLY. That
-// leaves the text a little short of the box, which is invisible; the other
-// direction would overflow it, which is not. A second AFM table would buy
-// tighter wrapping in the one path that only runs past 150 MB.
-const HELV_DEFAULT_W = 556
-const HELV_W: Record<string, number> = {
-  ' ': 278, '!': 278, '"': 355, '#': 556, $: 556, '%': 889, '&': 667, "'": 191, '(': 333,
-  ')': 333, '*': 389, '+': 584, ',': 278, '-': 333, '.': 278, '/': 278, ':': 278, ';': 278,
-  '<': 584, '=': 584, '>': 584, '?': 556, '@': 1015, A: 667, B: 667, C: 722, D: 722, E: 667,
-  F: 611, G: 778, H: 722, I: 278, J: 500, K: 667, L: 556, M: 833, N: 722, O: 778, P: 667,
-  Q: 778, R: 722, S: 667, T: 611, U: 722, V: 667, W: 944, X: 667, Y: 667, Z: 611, '[': 278,
-  '\\': 278, ']': 278, '^': 469, _: 556, '`': 333, a: 556, b: 556, c: 500, d: 556, e: 556,
-  f: 278, g: 556, h: 556, i: 222, j: 222, k: 500, l: 222, m: 833, n: 556, o: 556, p: 556,
-  q: 556, r: 333, s: 500, t: 278, u: 556, v: 500, w: 722, x: 500, y: 500, z: 500, '{': 334,
-  '|': 260, '}': 334, '~': 584, æ: 889, ø: 611, å: 556, Æ: 1000, Ø: 778, Å: 667
-}
-const faceWidth = (s: string, size: number, mono: boolean): number => {
-  let w = 0
-  if (mono) w = COURIER_W * [...s].length
-  else for (const ch of s) w += HELV_W[ch] ?? HELV_DEFAULT_W
-  return (w / 1000) * size
+/** The face a /DA resource name stands for — the reverse of faceOf, so a box
+ *  read back from the file keeps its face through every regeneration of its
+ *  appearance. undefined for a name we did not write (another app's box);
+ *  the appearance then falls back to Helvetica, as before. */
+const fontOfRes = (res: string | undefined): number | undefined => {
+  if (!res) return undefined
+  for (const [k, face] of Object.entries(STANDARD_FACES)) if (face.res === res) return Number(k)
+  return undefined
 }
 
-/** Naive word wrap at `maxW` points; hard-breaks overlong words by char. */
-function wrapText(text: string, size: number, maxW: number, mono = false): string[] {
-  const helvWidth = (str: string, sz: number): number => faceWidth(str, sz, mono)
+/** Word wrap at `maxW` points with the face's own Standard-14 widths — the
+ *  widths PDFium wraps by in the normal write path, so a box that hugs its
+ *  text (issue #66) breaks its lines in the same places here as there and on
+ *  screen. A word moves down once it — with the space after it, when another
+ *  word follows — would make the line WIDER than the box, as PDFium's does.
+ *  Hard-breaks a single word wider than the box by char. */
+function wrapText(text: string, size: number, maxW: number, font: number | undefined): string[] {
+  const width = (str: string): number => standardTextWidth(str, size, font)
   const lines: string[] = []
   for (const para of text.split(/\r\n|\r|\n/)) {
     let line = ''
-    for (const word of para.split(' ')) {
+    const words = para.split(' ')
+    for (const [i, word] of words.entries()) {
       const candidate = line === '' ? word : `${line} ${word}`
-      if (helvWidth(candidate, size) <= maxW || line === '') {
+      const room = i < words.length - 1 ? `${candidate} ` : candidate
+      if (width(room) <= maxW || line === '') {
         line = candidate
         // hard-break a single word wider than the box
-        while (helvWidth(line, size) > maxW && line.length > 1) {
+        while (width(line) > maxW && line.length > 1) {
           let cut = line.length - 1
-          while (cut > 1 && helvWidth(line.slice(0, cut), size) > maxW) cut--
+          while (cut > 1 && width(line.slice(0, cut)) > maxW) cut--
           lines.push(line.slice(0, cut))
           line = line.slice(cut)
         }
@@ -1339,13 +1326,17 @@ function buildAppearance(g: Geom, s: ShapeSpec): Appearance {
     case 'freetext': {
       const q = s.quads[0]
       const size = s.fontSize ?? 12
-      const inset = 2
       const face = faceOf(s.font)
-      const lines = wrapText(s.contents ?? '', size, Math.max(size, q.w - 2 * inset), face.mono)
-      const leading = size * 1.18
+      // Set exactly as PDFium sets it in the normal write path — no inset,
+      // first baseline one ascent down, one step per line (shared/
+      // freetext-layout.ts) — so a box keeps its look, and its line breaks,
+      // whichever path a file's size sends it down.
+      const metrics = freetextFaceMetrics(s.font)
+      const lines = wrapText(s.contents ?? '', size, q.w, s.font)
+      const leading = size * metrics.step
       // Text matrix carries the /Rotate so glyphs stay upright in display
       // space; the translation lands the first baseline at the box top-left.
-      const [tx, ty] = toUser(g, q.x + inset, q.y + inset + size * 0.75)
+      const [tx, ty] = toUser(g, q.x, q.y + size * metrics.ascent)
       const TM: Record<Geom['rot'], string> = { 0: '1 0 0 1', 90: '0 1 -1 0', 180: '-1 0 0 -1', 270: '0 -1 1 0' }
       ops.push('BT', `/${face.res} ${fmtNum(size)} Tf`, `${fmtRgb(s.color)} rg`,
         `${TM[g.rot]} ${fmtNum(tx)} ${fmtNum(ty)} Tm`, `${fmtNum(leading)} TL`)
@@ -1726,22 +1717,26 @@ async function opUpdate(pdf: PdfFile, req: ModifyAnnotationRequest): Promise<Ann
   const g = geomOf(page)
 
   // ---- apply the patch to the dict (all geometry in USER space) ----
-  if (req.color) {
-    if (type === 'freetext') {
-      // font colour lives in /DA — keep the existing size AND face. The face
-      // is carried over by resource NAME rather than re-derived: a recolour
-      // must not silently re-set the box in Helvetica.
+  if (type === 'freetext') {
+    // Colour, face and size all live in /DA. Each is replaced on its own and
+    // the other two carried over from the string as it stands — a recolour
+    // must not silently re-set the box in Helvetica at 12 pt, and a new size
+    // (issue #53) must not lose the colour. The appearance regenerated below
+    // reads this very string back (shapeFromDict), so the two agree.
+    if (req.color || req.font !== undefined || req.fontSize !== undefined) {
       const oldDa = dict.get('DA')
       const da = oldDa && (oldDa.t === 'str' || oldDa.t === 'hex') ? decodePdfString(oldDa) : ''
       const m = /\/(\S+)\s+([\d.]+)\s+Tf/.exec(da)
-      const size = m ? Number(m[2]) : 12
-      const res = m?.[1]
+      const c = /([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/.exec(da)
+      const color: Rgb = req.color ?? (c ? [Number(c[1]), Number(c[2]), Number(c[3])] : [0, 0, 0])
+      const size = req.fontSize ?? (m ? Number(m[2]) : 12)
+      const res = req.font !== undefined ? faceOf(req.font).res : (m?.[1] ?? 'Helv')
       dict.set('DA', { t: 'str', raw: Buffer.from(
-        `${fmtRgb(req.color)} rg /${res ?? 'Helv'} ${fmtNum(size)} Tf`, 'latin1') })
-    } else {
-      dict.set('C', ARR(req.color.map(N)))
-      if (dict.has('IC')) dict.set('IC', ARR(req.color.map(N)))
+        `${fmtRgb(color)} rg /${res} ${fmtNum(size)} Tf`, 'latin1') })
     }
+  } else if (req.color) {
+    dict.set('C', ARR(req.color.map(N)))
+    if (dict.has('IC')) dict.set('IC', ARR(req.color.map(N)))
   }
   if (req.opacity !== undefined) dict.set('CA', N(req.opacity))
   if (req.contents !== undefined) {
@@ -1898,7 +1893,7 @@ async function shapeFromDict(
   if (type === 'freetext') {
     const da = dict.get('DA')
     const daStr = da && (da.t === 'str' || da.t === 'hex') ? decodePdfString(da) : ''
-    const sm = /\/\S+\s+([\d.]+)\s+Tf/.exec(daStr)
+    const sm = /\/(\S+)\s+([\d.]+)\s+Tf/.exec(daStr)
     const contentsV = dict.get('Contents')
     return {
       type,
@@ -1906,7 +1901,11 @@ async function shapeFromDict(
       color,
       opacity,
       contents: contentsV && (contentsV.t === 'str' || contentsV.t === 'hex') ? decodePdfString(contentsV) : '',
-      fontSize: sm ? Number(sm[1]) : 12
+      fontSize: sm ? Number(sm[2]) : 12,
+      // The face by its /DA resource name: without it every regeneration
+      // (a recolour, a move) set the appearance back in Helvetica while /DA
+      // still named Times
+      font: fontOfRes(sm?.[1])
     }
   }
   // square / circle: geometry is the /Rect itself

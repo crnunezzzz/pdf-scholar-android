@@ -49,6 +49,35 @@ Grunnmuren levert 2026-07-09: mupdf `AnnotationEngine` skriver Highlight (5 farg
 - [x] Angre/gjør om for annotasjoner: Ctrl+Z / Ctrl+Shift+Z (også Ctrl+Y) som inverterbare motoroperasjoner — fungerer også på tvers av dokument-gjenåpninger (levert 2026-07-09, opprinnelig fase 5-punkt)
 - [x] «Armert verktøy»-flyt: tekstmarkeringsverktøyene armes fra verktøylinjen, merker utvalget ved museslipp og forblir aktive til neste utvalg (Esc slår av) (levert 2026-07-16)
 - [x] Egendefinert fargevelger + opasitetskontroll: fargehjul bak «+» i markeringsmenyen som husker de sist valgte fargene (levert 2026-07-12), opasitetsglider per verktøy i verktøyvalgene (levert 2026-07-25)
+  - **Fargehjulet i verktøylinjen også** (2026-10-24, Emil: «ikke paritet
+    med kontekstmeny og toolbar»): samme `CustomColorPicker` bak «+» i
+    verktøylinjens farge-rader for penn/tusj og tekstmarkeringene, samme
+    lagrede liste (`addCustomColor`). Og hjulet selv slipper ut av menyens
+    rulleboks (PR #59): `.color-picker-pop` er `position: fixed`, målt fra
+    «+»-knappen, over den når det er plass og under ellers — en
+    `overflow: auto` på menyen klippet det til en stripe.
+  - **Ctrl+N åpner en fil** (2026-10-24, Emils ønske: «som plusstegnet i
+    fanebaren»): `file.open` har `mod+o` OG `mod+n` som standard; nytt vindu
+    er fortsatt Ctrl+Shift+N.
+  - **Fargeraden bryter linje** (2026-10-24, Emil etter v0.71.0: «merkelig
+    hvordan farge-prikkene komprimeres, men ikke de som er custom»): med tre
+    husket farger ble raden bredere enn tekstboksens popover (248 px), og en
+    flex-prikk krymper som standard — de faste ble ovaler, de huskede sto i
+    sin egen innpakning og holdt bredden. `.color-row` har `flex-wrap: wrap`
+    og hver prikk `flex: none` — og siden (Emil, samme kveld: «bedre om vi
+    ikke får overflow … heller litt bredere, uavhengig av om custom farger
+    ligger der») er popoveren 320 px og en verktøymeny med fargerad 324 px
+    (`.tool-menu:has(.color-row)`; håndens ene bryter beholder 218), nok til
+    fem palettfarger, tre huskede og «+» på én linje: 9 × 23 + 8 × 9 = 279,
+    pluss radens 16 og boblens egen innpadding. Bryting står igjen bare som
+    sikkerhetsnett. Tekstverktøyets egen meny i verktøylinja fikk
+    også hjulet og de huskede fargene (popoveren for en tekstboks hadde dem).
+    Og hjulet selv: Emil så «bare hex» — den 26 px fargeruta som åpner
+    systemets fargedialog leste som enda en farge, ikke som en knapp. Den
+    tegnes nå som en regnbuering rundt fargen den står på, med tooltip «Åpne
+    fargevelgeren – hjul, RGB og hex». Poppen BLIR i menyens DOM: en portal
+    til body ble prøvd og forkastet, fordi menyene lukker på pointerdown
+    utenfor sitt eget element, så første klikk i poppen lukket menyen under.
 - [x] **Interop-port**: PDFX-annoterte filer åpner med identisk visning i Edges innebygde viser — Emils manuelle test, godkjent som tilstrekkelig 2026-08-02 (Acrobat/SumatraPDF-matrisen utgår som krav; Edge er uansett interop-baren, jf. plattformparitetsregelen)
 
 ## Fase 5 — Fullt annoteringsverktøysett
@@ -72,7 +101,7 @@ Grunnmuren levert 2026-07-09: mupdf `AnnotationEngine` skriver Highlight (5 farg
 
 ## Fase 6.5 — Faner (Emil ønsker dette tidlig, trukket frem fra fase 7)
 - [x] Fanelinje for flere åpne dokumenter: klikk/klikk-på-✕/midtklikk lukker, + åpner, Ctrl+Tab / Ctrl+Shift+Tab veksler, Ctrl+W lukker, Ctrl+O åpner; bakgrunnsfaner beholder full tilstand (scroll, zoom, angre-stakk) og leseposisjon lagres ved fanebytte (levert 2026-07-10)
-- [x] Dra faner for å endre rekkefølge; «lukk andre faner»-meny (levert 2026-07-29) — dra bytter plass live i linja (ingen protokollendring: main svarte allerede `'same'` når slippet skjer i eget vindu), meny med «Lukk andre faner»/«Lukk faner til høyre» som spør om én fane om gangen, og «Flytt til venstre/høyre» + Ctrl+Shift+PageUp/PageDown for berøring og tastatur
+- [x] Dra faner for å endre rekkefølge; «lukk andre faner»-meny (levert 2026-07-29) — dra bytter plass live i linja (ingen protokollendring: main svarte allerede `'same'` når slippet skjer i eget vindu), meny med «Lukk andre faner» som spør om én fane om gangen, og Ctrl+Shift+PageUp/PageDown for tastaturet («Lukk faner til høyre» og «Flytt til venstre/høyre» tatt ut av menyen 2026-10-28, «Kopier sti» inn ved siden av «Vis i Filutforsker»)
 - [x] **En fane dras som en fil** (2026-09-17, Emils ønske: «dra fanen inn i
   et annet vindu skal fungere som en filopplastning»). Fanelinja avbryter
   HTML5-draget og ber main om `webContents.startDrag` med dokumentets sti —
@@ -111,9 +140,61 @@ Grunnmuren levert 2026-07-09: mupdf `AnnotationEngine` skriver Highlight (5 farg
   verktøylinja som ikon, «Innhold» mistet etiketten (panelet har fire faner,
   ikke bare innhold), fanene kommer tilbake sammen med verktøylinja i
   fullskjerm, og en chevron i enden lister alle faner fra tre og oppover.
+- [x] **Tekstboksens størrelse etterpå, og menyen med verktøyet armert**
+  (issue #53 punkt 2, levert 2026-10-23): skriftstørrelsen kunne bare velges
+  for NESTE boks — boksens egen meny hadde skrift og fet/kursiv, men ingen
+  glider. Nå har den den samme glideren som tekstverktøyets meny, og en
+  endring setter DENNE boksen om (boksen vokser til bokstavene, skriften
+  beholdes; samme gulvregel som skriftbyttet). `fontSize` reiser som `font`:
+  patch → `ModifyAnnotationRequest` → modellens `fontSize` i EmbedPDF, /DA i
+  appenderen — og BEGGE motorene fikk samtidig ansiktet lest tilbake fra /DA
+  (`readFreeTextFace` i `pdfium-annot-ops.ts`, `fontOfRes` i appenderen):
+  modellen PDFium gir tilbake for en eksisterende boks bærer ikke noe ansikt,
+  så HVER gjentegning (en omfarging, en flytting, nå en størrelse) satte en
+  Courier-boks tilbake i Helvetica mens /DA fortsatt sa Courier — målt
+  2026-10-23 med en sonde gjennom motoren; appenderen slapp i tillegg et
+  skriftbytte på gulvet. Og med tekstverktøyet armert åpner
+  et klikk på en eksisterende boks menyen VED SIDEN AV redigeringen (før: bare
+  redigeringen; menyen kom kun av et klikk uten verktøy) — et klikk i menyen
+  lagrer teksten først (redigeringens blur) og setter så boksen om.
+  `test:engine` (størrelse etter skrift, i /DA), `test:appender` (skrift +
+  størrelse i én patch, fargen beholdt, utseendet satt i Times 20) og
+  `test:annot-edit` § 4–5 (glideren dobler bokstavene på siden, menyen sier
+  24 pt, skriften overlever, boksen vokser; armert verktøy gir redigering OG
+  meny) dekker det. Edges rad (størrelse, fet, kursiv) finnes dermed i begge
+  menyer; verktøylinjens meny gjelder fortsatt neste boks.
+- [x] **Skarp tekst ved alle zoomnivåer** (issue #53 punkt 1, levert
+  2026-10-23): en leser så teksten «uskarp» ved de fleste zoomnivåer, og ±1 %
+  kurerte det — Edge hadde det ikke. Årsaken var subpiksel-resampling av
+  lerretet: sidene lå på brøkdels-piksler (sentrert ved (bredde − side)/2, og
+  595,28 CSS-px er 892,9 enhetspiksler ved 1,5×), bitmapet var `floor(bredde ×
+  dpr)` og ble strukket over boksen, og den adaptive kontrolleren kunne velge
+  en tetthet under skjermens (1,12 på 1,25) etter hva gjennomstrømmings-
+  anslaget tilfeldigvis leste — derav «ikke konsekvent». Nå snapper layouten
+  (`buildRows`, `devicePixelRatio` i opsjonene) hver kant, hvert spor og
+  summen til hele enhetspiksler, `PdfPage` dimensjonerer bitmapet fra den
+  snappede boksen og mapper viewporten på det med render-transformen, og
+  kontrolleren går i trinn (1, 1,25, 1,5, 2, 3). Målt i nettforhåndsvisningen
+  ved 1,5×: 100 % gikk fra 321,78/892,9 enhetspiksler til 322/893 = bitmapet,
+  115 % og 132 % like hele. pdf.js' egen viewer gjør det samme med
+  `roundToDivide`. `test:rotation` § 9 dekker aritmetikken.
+- [x] **«Dupliser fane»** (issue #53, levert 2026-10-23): en fane til på
+  samme dokument, rett etter kilden og på siden den sto på — som en nettlesers
+  duplisering (fanemenyen og Ctrl+Shift+K, Edges tastekombinasjon). Hva en
+  fane husker er sted og zoom å gå tilbake til; delt visning er fortsatt
+  stedet for å SAMMENLIGNE. Blokkeringen fra august (under) var alt betalt av
+  to-dokument-splitten: `docRegistry` teller visningene foran hovedprosessens
+  sett, den lokale dokumentbussen bærer en skriving fra den ene fanen til den
+  andre, og utkastet er stiens — skitten i én er skitten i begge, og å lukke
+  én spør ingenting så lenge den andre står (`closeTabAwait` sjekker
+  tellingen). Det som faktisk gjensto: sti-oppslagene i `App.tsx` som fant ÉN
+  fane per sti (`tabsOn` gir alle, den aktive først), og at kopien laster
+  utkastet uten å kalle det «gjenopprettet». Økten folder duplikater tilbake
+  til én fane ved omstart (`session.ts` holder én per sti) — bevisst, til noen
+  savner det. `test:tab-duplicate` dekker det.
 - ~~**Kopi av samme dokument i en ny FANE**~~ — **sløyfet (Emil 2026-08-09)**,
-  etter at kostnaden ble kartlagt. Bevaringsverdig fordi forslaget er naturlig
-  og kommer igjen. Ideen var å gjenskape delt visning med to faner i stedet for
+  etter at kostnaden ble kartlagt; **levert likevel 2026-10-23** (over), da
+  splitten hadde betalt den. Ideen var å gjenskape delt visning med to faner i stedet for
   to paneler, live-synket. Det virker for et nytt VINDU fordi vinduet er
   hovedprosessens regnskapsenhet — `openDocs` er nøklet på webContents, og
   varslingen hopper over avsenderen. To faner deler ett webContents og er
@@ -376,6 +457,120 @@ Dette går foran «Neste bolk — penn og nettbrett»; den bolken gjenopptas ett
   - Dekket av `test:attachments` (regler + pdf.js-lesing),
     `test:attachments-desktop` (mains håndterere) og `test:engine` seksjon 13
     (vedleggene overlever lagring byte for byte, bindersens utseende urørt).
+- [x] **Varig samtalelager og samlet, søkbar historikk** (issue #46, steg 1 av
+  tre, 2026-10-22; ruzzbehs ønske — «hundrevis av dokumentsamtaler som ikke
+  må bli utilgjengelige fordi de er spredt på enkelt-PDF-er»). Funnet som
+  gjorde det presserende: samtalene lå i localStorage med tak på 10 per
+  dokument og 30 dokumenter, det 31. kastet ut det eldste i stillhet — så
+  «samlet historikk» måtte begynne med at lageret ble varig. Nå:
+  - Samtalene går gjennom `PdfxApi` (`getConversations` / `setConversations`
+    / `listConversations` / `onConversationsChanged`): én JSON-fil per
+    dokument under `userData/chats` på desktop (`src/main/chat-history.ts`,
+    samme mønster som bildelageret: atomisk skriving, kø per dokument),
+    IndexedDB i utvidelsen (`extension-chat-history.ts`), localStorage i
+    dev:web. Ingenting kastes ut. Det gamle lageret importeres én gang ved
+    første lesing og nøkkelen fjernes (`chat-store.ts`).
+  - Historikkvisningen i panelet har søkefelt og bryteren «Alle dokumenter»:
+    hvert ord må finnes (tittel, dokumentnavn eller tekst, uavhengig av
+    store/små bokstaver, regex-tegn bokstavelig), nyeste først, med et
+    utdrag rundt første treff. Et treff i et annet dokument åpner dokumentet
+    (fane her; vindu/fane fra det løsrevne vinduet og i utvidelsen) på den
+    samtalen — overleveringen er en kortlivet localStorage-nøkkel, slik at
+    den krysser vinduer på alle plattformer.
+  - Søket er et HISTORIKKSØK, ikke gjenfinning: BM25-indeksen i
+    `ai-retrieval.ts` ble vurdert og lagt bort — en rangert poengsum er
+    uforutsigbar i en liste av gamle samtaler, der alle-ord-og-nyest-først
+    er det man venter.
+  - Dekket av `test:chat-history` (regler + desktop-lageret mot temp-mappe);
+    PLATFORMS.md avvik 31. Steg 2 (eksport til Markdown/JSON + merke i
+    biblioteket) og 3 (manuell gjenbruk av utdrag i komposisten) står igjen;
+    MCP er bevisst utsatt — eksportmappen er grensesnittet inntil noen kommer
+    med et konkret behov.
+  - **Flyttede og omdøpte filer gjenkjennes** (2026-10-22): stien var
+    identiteten for alt per fil, så en flyttet PDF åpnet som et fremmed
+    dokument og samtaler, bokmerker og leseposisjon ble liggende igjen.
+    Nå bærer PDF-ens egen /ID[0] (lest fra bytene, null kostnad) postene
+    over til ny sti — men bare fra en sti der filen er BORTE, så en kopi
+    aldri stjeler originalens historikk. /ID[0] overlever begge
+    lagringsveiene våre (full omskriving og appenderen, sjekket mot ekte
+    motor). Valgt framfor tekst-hash av første sider, som jeg først foreslo:
+    /ID leses uten pdf.js og før posisjonen slås opp, så dokumentet åpner
+    rett på siden. En fil uten /ID får ingen gjenkjenning. Beskjed «Gjenkjent
+    fra …» når det skjer. Dekket av `test:doc-identity` (CI) og
+    `test:identity-desktop`; PLATFORMS.md avvik 32.
+  - **To hull fra risikogjennomgangen tettet** (2026-10-23): samtaler om et
+    passordbeskyttet dokument lagres uten sidebilder og snips (teksten
+    beholdes, boblen sier «Bilder ikke lagret (N)») — samme regel som
+    forsidebildene har for låste filer. Og «Alle dokumenter» leser ikke
+    lenger bildene: main holder et sammendrag per fil og tolker bare filer
+    som er endret siden sist; utvidelsen skriver sammendraget i egen
+    IndexedDB-tabell i samme transaksjon.
+  - **«Samtaler» i biblioteket** (2026-10-23, Emils bestilling): en fane ved
+    siden av «Nylig lest» med alle samtalene gruppert per dokument, søk,
+    lesing i biblioteket (siden ruller — ingen kikkhull-boks, verken for
+    lista eller svaret), «Åpne i dokumentet» på raden og i leseren.
+    «Rydd opp og eksporter» samler fire ENGANGShandlinger — dokumenter som
+    ikke finnes lenger (glemmer alt om dem, men aldri et utkast med ulagrede
+    merknader), eldre enn 3/6/12/24 måneder, behold bare de 50–500 nyeste,
+    fjern bilder og behold teksten — hver med antall før noe skjer og en
+    bekreftelse i raden, siden ingen kan angres. Ingen stående regel: «behold
+    seks måneder» som innstilling er den stille utkastingen det varige
+    lageret ble bygget for å avskaffe. Eksport til Markdown (lesbar uten
+    appen) og JSON (alt, med bilder). Dekket av `test:chat-history` seksjon 9.
+  - **Finpuss etter Emils gjennomgang** (2026-10-23): et dempet samtalemerke
+    med antall på «Nylig lest» (forside og rad) og «Vis samtaler» blant
+    handlingene, som åpner fanen filtrert på dokumentet; merkelappen
+    «Filen finnes ikke» på dokumenter som er borte (biblioteket og panelets
+    alle-dokumenter-liste); sortering (sist endret, opprettet, dokument A–Å,
+    flest meldinger) og filtrene «Filen mangler» og «Med bilder»;
+    «Egendefinert …» i både «Eldre enn» og «Behold bare de nyeste»; en
+    kildebrikk utenfor sitt dokument åpner dokumentet PÅ passasjen med den
+    markert, også i en fane som allerede er åpen; og søket på tvers kjører
+    der lageret er (main på desktop), så et vindu bare får treffene — målt
+    2026-10-23: 5 000 samtaler var 22 MB per opplisting, selve søket 15 ms.
+    Dekket av `test:chat-history` seksjon 10 og `test:library-desktop`.
+  - **Tidligere samtaler som kontekst** (2026-10-23, Emils bestilling: «viktig
+    at brukeren har kontroll … ikke automatikk»): en knapp med tekst,
+    «Samtaler», i komposisten åpner en velger med søk der INGENTING er
+    krysset av; det som legges ved, står som brikker over komposisten og går
+    med hvert spørsmål i samtalen til det tas av, og lagres med samtalen.
+    Valgt framfor en bryter, som blir automatikk i praksis. Vedleggene går i
+    en egen blokk i SYSTEMPROMPTEN, bygget på nytt ved hver forespørsel —
+    aldri i brukermeldingen (kunne aldri tas ut igjen av historikken) og
+    aldri i dokumentet (en leverandør med innebygde kilder ville pekt inn i
+    feil tekst). Dokumentet er eneste kilde; bruker svaret noe fra en
+    samtale, merkes det [SAMTALE n], som blir en dempet «Samtale»-brikke som
+    åpner den samtalen. Tidligere svar er notater: er de uenige med
+    dokumentet, vinner dokumentet. Bare tekst, ingen bilder; hver samtale og
+    blokken som helhet har et tak, og blokkens størrelse trekkes fra
+    dokumentets budsjett. «Bekreft før deling» navngir et vedlagt dokument
+    som ikke er delt med leverandøren. Dekket av `test:conversation-context`
+    (CI) og `test:attach-desktop` mot et endepunkt som tar opp hva som
+    faktisk sendes. Ikke prøvd mot ekte modeller (AI-TESTING.md). Forslag i
+    velgeren ut fra spørsmålet er ikke bygget.
+  - **Bindersen** (2026-10-24, Emils bestilling: «Samtaler» like godt en
+    generell vedleggsknapp, og brikkene i tekstfeltet var rotete): ÉN
+    binders i komposisten med et tall på, som åpner en liste over alt som er
+    lagt ved — samtaler, filer, sider, annoteringer, bilder, hver med sitt
+    kryss — og tre veier inn: «Samtale …» (velgeren), «Bilde …», «Fil …».
+    Brikkene står ikke lenger i tekstfeltet. Lista åpner seg selv når noe
+    nytt lander (et utsnitt tegnet på siden ville ellers forsvunnet inn i et
+    tall) og lukkes ved sending, Esc og klikk utenfor. Lokale filer
+    (`src/renderer/src/attach-file.ts`, `src/shared/file-context.ts`): en
+    PDF leses med pdf.js i rendereren, en tekstfil (md, txt, csv, json, tex,
+    bib, log) som den er; teksten går i en egen `[FILE n]`-blokk i
+    SYSTEMPROMPTEN etter samtaleblokken, med samme regler — dokumentet er
+    eneste kilde, en fil er notater — tak per fil (40k tegn) og samlet
+    (80k), maks fem, størrelsen trekkes fra dokumentets budsjett, og
+    «Bekreft før deling» navngir filen før første forespørsel med den går.
+    Ingen bilder fra filer. `test:file-context` (CI) og `test:attach-desktop`
+    § 6 dekker det.
+  - **Nettsøk er én bryter** (2026-10-24, Emil: tre-trinns-knappen «lukket /
+    på forespørsel / alltid» var forvirrende; «slik ChatGPT gjør det»): av
+    eller på. På betyr at verktøyet ligger ved og modellen søker når
+    spørsmålet ber om det, rett ut eller underforstått — aldri fordi
+    dokumentet sier det (`WEB_HINT_ON` i `ai-chat.ts`). «Alltid» finnes ikke
+    lenger; `'ask'` lever videre bare for hurtigboblens egne handlinger.
 - [ ] Restene som gjør veikartet rent, alle små: **«Annoterte sider»-eksport**
   (fase 6), **«Kopier chat som Markdown»** (tankeboksen — variant 1, ingen ny
   knapp uten Emils UI-beslutning), og **Gemini-praksistesten** (fase 10) som
@@ -387,8 +582,11 @@ Dette går foran «Neste bolk — penn og nettbrett»; den bolken gjenopptas ett
   utkast-håndtering og tastaturruting bor samtidig. Det er nøyaktig de områdene
   risikolista nederst i dette dokumentet peker på, så filen er der en feil er
   dyrest å finne.
-- [ ] **Skrevet QA-matrise** (`docs/QA.md`) — den manuelle runden vi i dag gjør
-  etter hukommelse før hver release, skrevet ned én gang.
+- [x] **Skrevet QA-matrise** (`docs/QA.md`, 2026-10-24, Emils bestilling etter
+  v0.71.0: «en cookbook for å kunne teste og kontrollere») — oppskrift per
+  funksjon fra v0.67 til v0.71: gjør, se, og hvilken maskintest som dekker
+  resten. Eldre funksjoner står fortsatt bare i RELEASE.md steg 1; utvid
+  kokeboka når noe eldre feiler for hånd.
 - [ ] **Soak-test:** 1000+ siders dokument, 15 faner, timesvis, med øye på
   minnet. Ingen av testene våre kjører over tid, og risiko 3 i lista under
   handler nettopp om store dokumenter.
@@ -475,4 +673,4 @@ Berøringsparitetsregelen gjelder hele bolken: hver mus/hover-interaksjon trenge
 4. **Inkrementell lagring-kanttilfeller** — sjekk `canBeSavedIncrementally()`, fall tilbake til full lagring; alltid temp-fil + atomisk rename.
 5. **pdf.js API-endringer** (månedlige major-versjoner) — pin eksakt versjon, all pdf.js-bruk bak egen modul.
 6. **Windows-integrasjon**: `second-instance`-argv får Chromium-brytere injisert — defensiv parser; single-instance-lås feiler når første instans kjører forhøyet (kjent Electron-bug).
-7. **Omfang vs. én utvikler** — strengt «brukbar app per fase»; OCR/reflow/skjemaer eksplisitt utenfor omfang (KI kom inn som egen fase 9 etter Emils beslutning 2026-07-10).
+7. **Omfang vs. én utvikler** — strengt «brukbar app per fase»; OCR/reflow/skjemaer eksplisitt utenfor omfang (KI kom inn som egen fase 9 etter Emils beslutning 2026-07-10; OCR for skannede sider kom inn 2026-10-23 — lokalt, bare i minnet, aldri skrevet inn i filen, se `src/renderer/src/ocr.ts`).

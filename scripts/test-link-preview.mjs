@@ -72,6 +72,28 @@ const check = (label, cond, detail = '') => {
     check(`linkKind(${name}) = ${kind}`, M.linkKind(name) === kind, M.linkKind(name))
   }
   check('linkKind(null) = other (an explicit destination has no name)', M.linkKind(null) === 'other')
+  // No name to read: the link's own words (the AEA journals' InDesign links
+  // «Table 1» to a page-wide /FitR, 2026-10-29)
+  const words = {
+    'Table 1': 'table',
+    'Table 1': 'table',
+    'Tables 2 and 3': 'table',
+    'Table A.1': 'table',
+    'Tab. 4': 'table',
+    'Tabell 2': 'table',
+    'Figure 3': 'figure',
+    'Fig. 3a': 'figure',
+    'Figures 1–2': 'figure',
+    'figur 5': 'figure',
+    'Abb. 2': 'figure',
+    '1': null,
+    'Section 3': null,
+    'tables are useful': null,
+    '': null
+  }
+  for (const [text, kind] of Object.entries(words)) {
+    check(`linkKindFromText(${JSON.stringify(text)}) = ${kind}`, M.linkKindFromText(text) === kind, String(M.linkKindFromText(text)))
+  }
 }
 {
   const ref = { num: 4, gen: 0 }
@@ -127,18 +149,19 @@ const check = (label, cond, detail = '') => {
   check('kept inside the window at its right edge', right.left + box.w <= win.w - 12, JSON.stringify(right))
 }
 {
-  // Once an abstract is in, the window is placed by what it needs
+  // Once an abstract is in, the card stays and grows downward (Emil,
+  // 2026-10-17: it used to jump to the other side of the link)
   const win = { h: 800 }
-  const fitsBelow = M.placeExpanded({ top: 100, bottom: 116 }, 500, win)
-  check('expanded: below the link when all of it fits there', fitsBelow.top === 124 && fitsBelow.height === 500 && !fitsBelow.covers, JSON.stringify(fitsBelow))
-  const fitsAbove = M.placeExpanded({ top: 600, bottom: 616 }, 500, win)
-  check('expanded: above when it fits there instead', fitsAbove.top + fitsAbove.height === 592 && fitsAbove.height === 500 && !fitsAbove.covers, JSON.stringify(fitsAbove))
-  const bigger = M.placeExpanded({ top: 500, bottom: 516 }, 700, win)
-  check('expanded: neither side holds it all → the roomier side, the rest scrolls', bigger.top === 12 && bigger.height === 480 && !bigger.covers, JSON.stringify(bigger))
-  const cramped = M.placeExpanded({ top: 300, bottom: 316 }, 520, { h: 620 })
-  check('expanded: no side worth reading in → covers the link, all of it in view', cramped.covers && cramped.height === 520 && cramped.top >= 12 && cramped.top + cramped.height <= 608, JSON.stringify(cramped))
-  const huge = M.placeExpanded({ top: 300, bottom: 316 }, 5000, { h: 620 })
-  check('expanded: never taller than the window', huge.height === 620 - 24, JSON.stringify(huge))
+  const fits = M.growInPlace(124, 500, win)
+  check('abstract in: the card stays put and grows under itself', fits.top === 124 && fits.height === 500 && !fits.moved, JSON.stringify(fits))
+  const longer = M.growInPlace(300, 700, win)
+  check('abstract in: past the window\'s foot it stays put and the rest scrolls', longer.top === 300 && longer.height === 800 - 12 - 300 && !longer.moved, JSON.stringify(longer))
+  const low = M.growInPlace(650, 500, win)
+  check('abstract in: a card near the foot slides up only as far as reading room needs', low.moved && low.top === 800 - 12 - 240 && low.height === 240, JSON.stringify(low))
+  const small = M.growInPlace(650, 130, win)
+  check('abstract in: a short card that still fits under itself does not move', !small.moved && small.top === 650 && small.height === 130, JSON.stringify(small))
+  const huge = M.growInPlace(12, 5000, { h: 620 })
+  check('abstract in: never taller than the window', huge.height === 620 - 24, JSON.stringify(huge))
 }
 {
   check('caption: «Figure 3:»', M.isFigureCaption('Figure 3: The Transformer'))
@@ -301,6 +324,427 @@ const L = (x0, y, text, size = 10) => ({ x0, x1: x0 + text.length * size * 0.5, 
   check('a single-column page is not two columns', !M.isTwoColumn([...Array(10)].map((_, i) => L(72, 700 - i * 12, 'a full width line of running text that crosses the middle of the page easily')), 612))
 }
 
+// ------------------- tier 1c: the citation read from the line (third round)
+{
+  // Where a substring sits in a line: the link's characters
+  const at = (line, s, from = 0) => {
+    const i = line.indexOf(s, from)
+    if (i < 0) throw new Error(`«${s}» not in «${line}»`)
+    return { start: i, end: i + s.length }
+  }
+  const cite = (line, s, ref, from = 0, label = null) => ({ ...at(line, s, from), kind: 'citation', label, ref })
+  const parts = (g) => JSON.stringify(g?.parts.map((p) => [p.a, p.b, p.first, p.last]) ?? null)
+
+  // The bracket itself
+  const b1 = 'wordline M [8–13] in the midst'
+  check('bracket: «[8–13]» from «[8»', JSON.stringify(M.citationBracket(b1, ...Object.values(at(b1, '[8'))).map((p) => [p.a, p.b])) === '[[8,13]]')
+  const b2 = 'models [3, 5–9; 12] here'
+  check('bracket: «[3, 5–9; 12]» is three members', JSON.stringify(M.citationBracket(b2, ...Object.values(at(b2, '9'))).map((p) => [p.a, p.b])) === '[[3,3],[5,9],[12,12]]')
+  check('bracket: «[5 - 9]» with blanks and a hyphen', JSON.stringify(M.citationBracket('[5 - 9]', 1, 2).map((p) => [p.a, p.b])) === '[[5,9]]')
+  check('bracket: the numbers\' own places', JSON.stringify(M.citationBracket(b1, 11, 13)[0].at) === JSON.stringify([at(b1, '8'), at(b1, '13')]))
+  check('not a bracket: «[see 5]»', M.citationBracket('as in [see 5] above', 11, 12) === null)
+  check('not a bracket: «[3, pp. 5–9]» (a locator)', M.citationBracket('in [3, pp. 5–9]', 4, 5) === null)
+  check('not a bracket: a year span «[2017–2019]»', M.citationBracket('[2017–2019]', 1, 5) === null)
+  check('not a bracket: a span no list has «[1–80]»', M.citationBracket('[1–80]', 1, 2) === null)
+  check('not a bracket: backwards «[9–5]»', M.citationBracket('[9–5]', 1, 2) === null)
+  check('not a bracket: the link outside it («[3] and 5»)', M.citationBracket('[3] and 5', 8, 9) === null)
+
+  // Both ends linked (hyperref + cite: «[8» and «13]»), from either end
+  const l1 = 'a type of thickened wordline M [8–13] in the midst of'
+  const end8 = cite(l1, '[8', 'cite.a')
+  const end13 = cite(l1, '13]', 'cite.f')
+  check('group from the first end: 8–13, both ends known', parts(M.citationGroup(l1, end8, [end13])) === '[[8,13,"cite.a","cite.f"]]')
+  check('group from the last end: the same group', parts(M.citationGroup(l1, end13, [end8])) === '[[8,13,"cite.a","cite.f"]]')
+  check('group with the other end unlinked: from the linked one', parts(M.citationGroup(l1, end8, [])) === '[[8,13,"cite.a",null]]')
+  // A link over «8–13» whole stands at its first number
+  check('one link over the whole range', parts(M.citationGroup(l1, cite(l1, '8–13', 'cite.a'), [])) === '[[8,13,"cite.a",null]]')
+
+  // The whole bracket, like Zotero: «[9, 33]» and «[3, 5–9]» from any number
+  const l2 = 'patch in two [29–32] and three [9, 33] dimensional models'
+  const g2 = M.citationGroup(l2, cite(l2, '33]', 'cite.s'), [cite(l2, '[9,', 'cite.c'), cite(l2, '[29', 'cite.x'), cite(l2, '32]', 'cite.y')])
+  check('«[9, 33]» from «33]»: both members, the neighbour bracket not', parts(g2) === '[[9,9,"cite.c","cite.c"],[33,33,"cite.s","cite.s"]]' && g2.hovered === 1)
+  const l3 = 'as shown in [3, 5–9] for the'
+  const g3 = M.citationGroup(l3, cite(l3, '3,', 'cite.p'), [cite(l3, '5', 'cite.q', l3.indexOf('5')), cite(l3, '9]', 'cite.u')])
+  check('«[3, 5–9]» from «3»: 3 and 5–9', parts(g3) === '[[3,3,"cite.p","cite.p"],[5,9,"cite.q","cite.u"]]' && g3.hovered === 0)
+
+  // Corroboration: the links must agree with the reading
+  const eqEnd = { ...at(l1, '13]'), kind: 'equation', label: null, ref: 'equation.13' }
+  check('the other end goes to an equation: no group', M.citationGroup(l1, end8, [eqEnd]) === null)
+  check('a numbered destination that names another entry: no group', M.citationGroup(l1, cite(l1, '[8', 'bib7', 0, 7), []) === null)
+  check('a numbered destination that names this one: the group', parts(M.citationGroup(l1, cite(l1, '[8', 'bib8', 0, 8), [cite(l1, '13]', 'bib13', 0, 13)])) === '[[8,13,"bib8","bib13"]]')
+  // A member whose links contradict it costs the group its OTHER members only
+  const g4 = M.citationGroup(l3, cite(l3, '9]', 'cite.u'), [{ ...at(l3, '3,'), kind: 'figure', label: null, ref: 'figure.3' }])
+  check('«[3, 5–9]» with «3» a figure link: 5–9 alone', parts(g4) === '[[5,9,null,"cite.u"]]' && g4.hovered === 0)
+  check('the hovered link must be a citation', M.citationGroup(l1, { ...end8, kind: 'other' }, [end13]) === null)
+
+  // False positives: what is not a bracketed numeric citation
+  const eqs = 'from (5)–(9) it follows'
+  check('equations «(5)–(9)»: no group', M.citationGroup(eqs, cite(eqs, '5', 'cite.k'), []) === null)
+  const prose = 'see pages 5–9 of the survey [3] for'
+  check('a page range in prose: no group', M.citationGroup(prose, cite(prose, '5', 'cite.k'), []) === null)
+  check('…but its own citation still reads: [3]', parts(M.citationGroup(prose, cite(prose, '3', 'cite.k'), [])) === '[[3,3,"cite.k","cite.k"]]')
+  const sec = 'Sections [5–9] of Ref. [2]'
+  check('a bracket whose other end goes to a section: no group', M.citationGroup(sec, cite(sec, '[5', 'cite.k'), [{ ...at(sec, '9]'), kind: 'section', label: null, ref: 'section.9' }]) === null)
+}
+{
+  // The family in the list's order, and a group's destinations along it
+  const D = (name, pageIndex, x, y, n = null) => ({ name, pageIndex, x, y, n })
+  const fam = [
+    D('cite.k', 45, 320, 700), D('cite.c', 44, 72, 300), D('cite.d', 44, 320, 700),
+    D('cite.a', 44, 72, 700), D('cite.b', 44, 72, 500), D('cite.e', 44, 320, 400)
+  ]
+  const ordered = M.orderFamily(fam, () => 612)
+  check('order: page, then the left column top-down, then the right', ordered.map((d) => d.name).join() === 'cite.a,cite.b,cite.c,cite.d,cite.e,cite.k', ordered.map((d) => d.name).join())
+  const names = (ds) => (ds ? ds.map((d) => d.name).join() : 'null')
+  check('both ends linked: the run between them', names(M.groupDests(ordered, { a: 8, b: 11 }, 'cite.b', 'cite.e')) === 'cite.b,cite.c,cite.d,cite.e')
+  check('both ends linked but the count disagrees: not trusted', M.groupDests(ordered, { a: 8, b: 10 }, 'cite.b', 'cite.e') === null)
+  check('only the first end: counted forward', names(M.groupDests(ordered, { a: 1, b: 3 }, 'cite.a', null)) === 'cite.a,cite.b,cite.c')
+  check('only the last end: counted back, over the column break', names(M.groupDests(ordered, { a: 4, b: 6 }, null, 'cite.k')) === 'cite.d,cite.e,cite.k')
+  check('past the list\'s end: null', M.groupDests(ordered, { a: 1, b: 4 }, 'cite.e', null) === null)
+  check('a name the family lacks: null', M.groupDests(ordered, { a: 1, b: 2 }, 'cite.zz', null) === null)
+  // Numbered names are matched by their number, wherever they are
+  const bib = [D('bib5', 20, 72, 700, 5), D('bib6', 20, 72, 650, 6), D('bib7', 20, 320, 700, 7), D('bib9', 21, 72, 700, 9), D('bib8', 20, 320, 600, 8)]
+  check('numbered: 5–9 by number, across the page', names(M.groupDests(M.orderFamily(bib, () => 612), { a: 5, b: 9 }, 'bib5', null)) === 'bib5,bib6,bib7,bib8,bib9')
+  check('numbered: a number missing → null', M.groupDests(bib, { a: 5, b: 10 }, null, 'bib9') === null)
+}
+{
+  // The entry as text: one paragraph, hyphenation undone, links kept
+  const runLine = (x0, y, parts) => {
+    // parts: [text, width] — runs laid end to end
+    let text = ''
+    let x = x0
+    const runs = []
+    for (const [t, w] of parts) {
+      runs.push({ x0: x, x1: x + w, start: text.length, end: text.length + t.length })
+      text += t
+      x += w
+    }
+    return { x0, x1: x, y, size: 10, text, runs }
+  }
+  const lines = [
+    runLine(72, 700, [['[5] T. Damour, Black Hole Eddy Currents, ', 200], ['Phys. Rev. D 18 (1978)', 110]]),
+    runLine(72, 688, [['3598–3604', 50], ['. Quelques proprietes electromagnet-', 180]]),
+    runLine(72, 676, [['iques des trous noirs, ', 110], ['https://doi.org/10.1103/', 120]]),
+    runLine(72, 664, [['PhysRevD.18.3598', 80], ['.', 3]])
+  ]
+  const links = [
+    { rect: [272, 698, 382, 708], url: 'https://doi.org/10.1103/PhysRevD.18.3598' },
+    { rect: [72, 686, 122, 696], url: 'https://doi.org/10.1103/PhysRevD.18.3598' },
+    { rect: [182, 674, 302, 684], url: 'https://doi.org/x' },
+    { rect: [72, 662, 152, 672], url: 'https://doi.org/x' }
+  ]
+  const seg = M.entrySegments(lines, links)
+  const text = seg.map((s) => s.text).join('')
+  check('entry text: lines joined by a space, a hyphenated word whole, a URL whole', text === '[5] T. Damour, Black Hole Eddy Currents, Phys. Rev. D 18 (1978) 3598–3604. Quelques proprietes electromagnetiques des trous noirs, https://doi.org/10.1103/PhysRevD.18.3598.', JSON.stringify(text))
+  const linked = seg.filter((s) => s.url).map((s) => s.text)
+  check('entry links: the journal reference over two lines is ONE link, its blank included', linked[0] === 'Phys. Rev. D 18 (1978) 3598–3604', JSON.stringify(linked))
+  check('entry links: the URL over two lines is one link, no blank', linked[1] === 'https://doi.org/10.1103/PhysRevD.18.3598', JSON.stringify(linked))
+  check('entry links: the full stop after a link is not the link\'s', seg[seg.length - 1].text === '.' && !seg[seg.length - 1].url)
+  check('entry text without links or runs: plain', JSON.stringify(M.entrySegments([{ x0: 72, x1: 300, y: 700, size: 10, text: 'Smith, A. A title.' }])) === JSON.stringify([{ text: 'Smith, A. A title.' }]))
+  check('a real hyphen before a capital stays', M.entrySegments([L(72, 700, 'the Gibbons-'), L(72, 688, 'Hawking action')]).map((s) => s.text).join('') === 'the Gibbons- Hawking action')
+  // textLines records where each run's characters are, collapsed whitespace and all
+  const tl = M.textLines([
+    { str: '  [5]  T.', transform: [10, 0, 0, 10, 72, 700], width: 40 },
+    { str: 'Damour', transform: [10, 0, 0, 10, 115, 700], width: 35 }
+  ])
+  check('textLines: runs address the final text', tl[0].text === '[5] T. Damour' && JSON.stringify(tl[0].runs) === JSON.stringify([{ x0: 72, x1: 112, start: 0, end: 6, y: 700 }, { x0: 115, x1: 150, start: 7, end: 13, y: 700 }]), JSON.stringify(tl[0]))
+  // A footnote opens on its raised marker: the line's y is the marker's, its
+  // baseline the words' (footnote 15 in Emil's thesis was cut through them)
+  const marked = M.textLines([
+    { str: '15', transform: [7, 0, 0, 7, 85, 109.7], width: 7 },
+    { str: 'See https://geodata.no/.', transform: [10, 0, 0, 10, 93, 106.2], width: 110 }
+  ])
+  check('a raised marker: one line, its baseline the words\' below the marker', marked.length === 1 && marked[0].y === 109.7 && M.baseline(marked[0]) === 106.2, JSON.stringify(marked))
+  check('a one-line footnote\'s box reaches the words\' descenders, not the marker\'s', Math.abs(M.entryBox(marked).bottom - (106.2 - 3.5)) < 0.01, JSON.stringify(M.entryBox(marked)))
+}
+
+// ------------- tier 1d: the whole target — footnote, float, display (round 4)
+// Emil, 2026-10-16: a window onto a footnote showed half a body line, the
+// rule, footnotes 6 AND 7 and white; a figure came out cut wherever the
+// window happened to end. The window is now cut to the element.
+const T = (x0, x1, y, text, size = 10) => ({ x0, x1, y, size, text })
+const PROSE = 'running prose of the body text set solid in the column'
+const near = (a, b, tol = 1.5) => Math.abs(a - b) <= tol
+{
+  // A page's foot: body text, then footnotes 6 and 7, each a marker set in
+  // from the margin with its continuation flush left, then the folio
+  const lines = []
+  for (let i = 0; i < 20; i++) lines.push(T(72, 540, 700 - i * 12, PROSE))
+  lines.push(
+    T(84, 540, 130, '6The first footnote, which runs on over a line break', 8),
+    T(72, 400, 121, 'and ends here.', 8),
+    T(84, 540, 112, '7The second footnote, which must not come along', 8),
+    T(72, 300, 103, 'with the first.', 8),
+    T(300, 305, 50, '3')
+  )
+  const fn6 = M.footnoteLines(lines, { x: 84, y: 138 }, [{ x: 84, y: 120, n: 7 }], 612)
+  check('footnote: from its marker to the next footnote, by the family\'s next anchor', fn6.length === 2 && fn6[1].text === 'and ends here.', JSON.stringify(fn6.map((l) => l.text)))
+  const bare = M.footnoteLines(lines, { x: 84, y: 138 }, [], 612)
+  check('footnote: without anchors, the next marker set in where this one was ends it', bare.length === 2, JSON.stringify(bare.map((l) => l.text)))
+  const fn7 = M.footnoteLines(lines, { x: 84, y: 120 }, [{ x: 84, y: 138, n: 6 }], 612)
+  check('footnote: the last one stops before the folio', fn7.length === 2 && fn7[0].text.startsWith('7The second'), JSON.stringify(fn7.map((l) => l.text)))
+  check('footnote zone: a point among the footnotes is in it', M.inFootnotes(lines, { x: 84, y: 133 }, 612))
+  check('footnote zone: a point in the body is not', !M.inFootnotes(lines, { x: 72, y: 600 }, 612))
+  // A destination that does not say (the AEA journals point every footnote
+  // link at «375 pt up»): the footnote is found by the marker it opens on
+  const by6 = M.footnoteByMarker(lines, '6', 612)
+  check('marker: «6» finds footnote 6\'s first line', by6 && by6.x === 84 && M.footnoteLines(lines, by6, by6.siblings, 612)[0]?.text.startsWith('6The first'), JSON.stringify(by6))
+  const by7 = M.footnoteByMarker(lines, '7', 612)
+  check('marker: «7» finds footnote 7, not 6\'s run-on', by7 && M.footnoteLines(lines, by7, by7.siblings, 612).map((l) => l.text).join('|') === '7The second footnote, which must not come along|with the first.', JSON.stringify(by7))
+  check('marker: a number no footnote opens on finds nothing', M.footnoteByMarker(lines, '8', 612) === null)
+  check('marker: the folio is no footnote', M.footnoteByMarker(lines, '3', 612) === null)
+  check('marker: words are no marker', M.footnoteByMarker(lines, 'Section', 612) === null)
+  // Body text opening on the number is not a footnote; «12» does not open on «1»
+  const body = [...lines, T(72, 540, 712, '1 percent of the firms, a body line opening on a number')]
+  check('marker: a body line opening on the number is not a footnote', M.footnoteByMarker(body, '1', 612) === null)
+  const twelve = [...lines.slice(0, 20), T(84, 540, 130, '12The twelfth footnote', 8), T(300, 305, 50, '3')]
+  check('marker: «12» is not footnote 1', M.footnoteByMarker(twelve, '1', 612) === null && M.footnoteByMarker(twelve, '12', 612) !== null)
+  // Two footnotes opening on one marker (a run-on line «6 per cent …»): unsure, so nothing
+  const twice = [...lines, T(72, 300, 94, '6 per cent of the sample, run on', 8)]
+  check('marker: two lines opening on it is not a verdict', M.footnoteByMarker(twice, '6', 612) === null)
+  // Outlines, then filled over them: the same line twice in one place is one
+  const doubled = [...lines, T(84, 540, 112, '7The second footnote, which must not come along', 8)]
+  check('marker: a line drawn twice is one footnote', M.footnoteByMarker(doubled, '7', 612) !== null)
+  // Math in a footnote's lines (Dworczak et al. 2021, p. 30): a fraction's
+  // numerator a hair above the baseline is a line of its own, a display sits
+  // further in — with nothing to stop it, footnote 28 ran on into 29. The
+  // other footnotes' openings are its siblings.
+  const math = [...lines.slice(0, 20),
+    T(64, 130, 89.8, '28In particular, M ≤ 1', 8.5),
+    T(174, 178, 90.1, '1', 5.5),
+    T(139, 160, 83.7, 'gB (rB ) +', 8.5),
+    T(168, 540, 83.7, 'gS (¯rS ) , which is finite by our assumption that', 8.5),
+    T(54, 120, 75.2, 'and continuous.', 8.5),
+    T(64, 540, 68.3, '29While kidneys are not quite homogeneous due to blood type', 8.5),
+    T(54, 300, 55.3, 'market clears independently of the others.', 8.5)]
+  const by28 = M.footnoteByMarker(math, '28', 612)
+  const fn28 = by28 && M.footnoteLines(math, by28, by28.siblings, 612).map((l) => l.text)
+  check('marker: footnote 28 with math in it stops before 29', fn28 && fn28.includes('28In particular, M ≤ 1') && fn28[fn28.length - 1] === 'and continuous.' && !fn28.some((t) => t.startsWith('29')), JSON.stringify(fn28))
+  const box28 = by28 && M.entryBox(M.footnoteLines(math, by28, by28.siblings, 612))
+  check('…and its box is 28\'s lines, the numerator inside the first', box28 && box28.x0 === 54 && box28.bottom > 68.3 + 1 && box28.top < 89.8 + 8.5 * 1.2, JSON.stringify(box28))
+}
+{
+  // A vector figure (paths and nothing else) with its caption under it, in
+  // a one-column page between two paragraphs
+  const lines = []
+  for (let i = 0; i < 7; i++) lines.push(T(72, 540, 700 - i * 12, PROSE))
+  lines.push(T(72, 300, 616, 'the paragraph ends short.'))
+  lines.push(T(72, 540, 400, 'Figure 2: A vector drawing with no text inside it, whose'), T(72, 330, 389, 'caption runs two lines.'))
+  for (let i = 0; i < 12; i++) lines.push(T(72, 540, 360 - i * 12, PROSE))
+  const paths = [{ x0: 100, y0: 430, x1: 500, y1: 600 }, { x0: 150, y0: 450, x1: 450, y1: 590 }]
+  const box = M.floatBox('figure', { x: 72, y: 412 }, lines, paths, { w: 612, h: 792 })
+  check('vector figure, caption below: from the drawing\'s top to the caption\'s foot', box && near(box.top, 600) && near(box.bottom, 389 - 3.5), JSON.stringify(box))
+  check('vector figure: the paragraph above and below stay out', box && box.top < 616 - 3.5 && box.bottom > 360 + 9.5)
+  const blind = M.floatBox('figure', { x: 72, y: 412 }, lines, [], { w: 612, h: 792 })
+  check('a drawing the page does not tell of: the empty band up to the body text', blind && near(blind.top, 616 - 3.5 - 4) && near(blind.bottom, 389 - 3.5), JSON.stringify(blind))
+  check('no caption under the anchor: no box (the window opens as before)', M.floatBox('figure', { x: 72, y: 800 }, lines.filter((l) => !l.text.startsWith('Figure')), paths, { w: 612, h: 792 }) === null)
+}
+{
+  // A table with its caption ABOVE (the custom), a wordy header row, ruled,
+  // then a section heading and its paragraph
+  const lines = [
+    T(72, 540, 700, 'Table 1: Results on the test set, a caption long enough to'),
+    T(72, 300, 689, 'wrap onto a second line.'),
+    T(90, 160, 668, 'Layer Type'), T(220, 420, 668, 'Complexity per Layer Sequential Operations'),
+    T(90, 170, 655, 'Self-Attention'), T(250, 280, 655, 'O(1)'), T(380, 410, 655, '0.92'),
+    T(90, 150, 643, 'Recurrent'), T(250, 280, 643, 'O(n)'), T(380, 410, 643, '0.87'),
+    T(72, 190, 600, '3.5 Positional Encoding')
+  ]
+  for (let i = 0; i < 12; i++) lines.push(T(72, 540, 580 - i * 12, PROSE))
+  const rules = [{ x0: 85, y0: 678, x1: 420, y1: 678 }, { x0: 85, y0: 637, x1: 420, y1: 637 }]
+  const box = M.floatBox('table', { x: 72, y: 712 }, lines, rules, { w: 612, h: 792 })
+  check('table, caption above: from the caption down to the bottom rule', box && near(box.top, 709.5) && near(box.bottom, 637), JSON.stringify(box))
+  check('table: the wordy header row is the table\'s, not prose; the heading below stays out', box && box.bottom > 600 + 9.5)
+  check('a table caption: «Table 1:», «Tab. 2», appendix «Table A.1»', M.isTableCaption('Table 1: x') && M.isTableCaption('Tab. 2 x') && M.isTableCaption('Table A.1: Calibrations') && !M.isTableCaption('tables are useful'))
+  check('a figure caption numbered in an appendix: «Figure A.1»', M.isFigureCaption('Figure A.1: Urgency'))
+}
+{
+  // Two columns; a figure across both, caption across the middle
+  const lines = []
+  for (let i = 0; i < 14; i++) lines.push(T(56, 296, 700 - i * 12, PROSE), T(316, 556, 700 - i * 12, PROSE))
+  lines.push(T(56, 556, 285, 'Figure 3: A figure set across both columns of the page, its caption too.'))
+  for (let i = 0; i < 14; i++) lines.push(T(56, 296, 250 - i * 12, PROSE), T(316, 556, 250 - i * 12, PROSE))
+  const graphics = [{ x0: 70, y0: 300, x1: 540, y1: 520 }]
+  const box = M.floatBox('figure', { x: 56, y: 297 }, lines, graphics, { w: 612, h: 792 })
+  check('two columns, a figure across both: the box runs across both', box && near(box.x0, 56) && near(box.x1, 556) && near(box.top, 520) && near(box.bottom, 285 - 3.5), JSON.stringify(box))
+  check('pageColumns: two columns', M.pageColumns(lines, 612).cols.length === 2)
+}
+{
+  // Two columns; a figure in the left one, body text beside it in the right
+  const lines = []
+  for (let i = 0; i < 12; i++) lines.push(T(56, 296, 700 - i * 12, PROSE))
+  lines.push(T(56, 296, 365, 'Figure 4: Only the left column.'))
+  for (let i = 0; i < 20; i++) lines.push(T(56, 296, 330 - i * 12, PROSE))
+  for (let i = 0; i < 50; i++) lines.push(T(316, 556, 700 - i * 12, PROSE))
+  const graphics = [{ x0: 60, y0: 380, x1: 290, y1: 540 }, { x0: 0, y0: 760, x1: 612, y1: 761 }]
+  const box = M.floatBox('figure', { x: 56, y: 377 }, lines, graphics, { w: 612, h: 792 })
+  check('a figure beside body text in the other column: in its column only', box && box.x0 >= 55 && box.x1 <= 297 && near(box.top, 540) && near(box.bottom, 365 - 3.5), JSON.stringify(box))
+}
+{
+  // A page-wide /FitR (InDesign's: it starts at x = -130, left of the paper)
+  // names no column: the table is found under it in the RIGHT one, ruled,
+  // cells in it, body text below — and the box keeps to that column
+  const lines = []
+  for (let i = 0; i < 50; i++) lines.push(T(56, 296, 700 - i * 12, PROSE))
+  lines.push(T(316, 360, 690, 'Table 2'), T(316, 520, 679, 'Shares by product category, 2013'))
+  for (let i = 0; i < 5; i++) lines.push(T(316, 380, 655 - i * 10, 'Category ' + i, 8), T(440, 470, 655 - i * 10, '12.' + i + '%', 8), T(500, 530, 655 - i * 10, '$1' + i + ' B', 8))
+  for (let i = 0; i < 30; i++) lines.push(T(316, 556, 590 - i * 12, PROSE))
+  const rules = [{ x0: 316, y0: 668, x1: 556, y1: 668 }, { x0: 316, y0: 610, x1: 556, y1: 610 }]
+  const box = M.floatBox('table', { x: -130, y: 712 }, lines, rules, { w: 612, h: 792 })
+  check('page-wide FitR (x off the paper): the table in the right column, its column only', box && box.x0 >= 315 && box.x1 <= 557 && near(box.top, 690 + 9.5) && near(box.bottom, 610), JSON.stringify(box))
+}
+{
+  // Two columns whose floats run across the middle (a results page): too
+  // many crossing lines for isTwoColumn, but each half's lines start together
+  const lines = []
+  for (let i = 0; i < 10; i++) lines.push(T(56, 556, 740 - i * 11, 'a table row across the whole page in a full width float'))
+  for (let i = 0; i < 10; i++) lines.push(T(56, 296, 600 - i * 12, PROSE), T(316, 556, 600 - i * 12, PROSE))
+  check('pageColumns: two columns under full-width floats', M.pageColumns(lines, 612).cols.length === 2 && !M.isTwoColumn(lines, 612))
+}
+{
+  // A display between two paragraphs: its number, a fraction above and below
+  // the baseline, the lead-in's short last line above and «where» below
+  const lines = []
+  for (let i = 0; i < 6; i++) lines.push(T(72, 540, 730 - i * 12, PROSE))
+  lines.push(
+    T(72, 200, 658, 'the matrix of outputs as:'),
+    T(220, 354, 630, 'Attention(Q, K, V) = softmax('), T(356, 372, 637, 'QK'), T(366, 376, 622, 'dk'), T(380, 390, 630, ')V'),
+    T(520, 534, 630, '(1)')
+  )
+  for (let i = 0; i < 6; i++) lines.push(T(72, 540, 600 - i * 12, 'where the queries and keys are of dimension and the values'))
+  const box = M.equationBox({ x: 220, y: 650 }, lines, [{ x0: 356, y0: 633, x1: 376, y1: 633.5 }], { w: 612, h: 792 })
+  check('display: the number\'s lines, the fraction above and below, across the column', box && near(box.top, 637 + 9.5) && near(box.bottom, 622 - 3.5) && near(box.x0, 72) && near(box.x1, 540), JSON.stringify(box))
+  check('display: the lead-in and the paragraph after stay out', box && box.top < 658 - 3.5 && box.bottom > 600 + 9.5)
+}
+{
+  // A caption is told from a paragraph that opens on «Figure 5.3 …»: the
+  // hypcap anchor at the float's top finds the caption under the drawing
+  const lines = []
+  for (let i = 0; i < 6; i++) lines.push(T(72, 540, 760 - i * 12, PROSE))
+  lines.push(T(72, 300, 688, 'Figure 5.3 displays this decomposition.'))
+  lines.push(T(72, 540, 470, 'Figure 5.3: Buyer actions and observable outcomes.'))
+  for (let i = 0; i < 6; i++) lines.push(T(72, 540, 440 - i * 12, PROSE))
+  const box = M.floatBox('figure', { x: 72, y: 680 }, lines, [{ x0: 90, y0: 490, x1: 520, y1: 670 }], { w: 612, h: 792 })
+  check('the caption, not the paragraph naming the figure', box && near(box.bottom, 470 - 3.5) && near(box.top, 670), JSON.stringify(box))
+  check('hypcap names: figure.caption.3 and table.caption.2', M.linkKind('figure.caption.3') === 'figure' && M.linkKind('table.caption.2') === 'table')
+}
+{
+  // arXiv's id stamped up the margin, drawn rotated: not read as a line
+  const items = [
+    { str: 'arXiv:1512.03385v1 [cs.CV] 10 Dec 2015', transform: [0, 20, -20, 0, 32, 250], width: 300 },
+    { str: 'Deep Residual Learning', transform: [14, 0, 0, 14, 150, 700], width: 200 }
+  ]
+  const up = M.uprightItems(items)
+  check('upright items: the rotated margin stamp is left out', up.length === 1 && up[0].str === 'Deep Residual Learning')
+}
+{
+  // The window sized to its box: grown first, read smaller only to a floor,
+  // scrolled only past that
+  const room = { w: 900, h: 600 }
+  const small = M.fitBox(200, 100, 600, room)
+  check('fit: a small box reads at the column scale, the window holds it whole', small.scale === 1.6 && small.fits && small.w === 200 * 1.6 + 24 && small.h === 100 * 1.6 + 12, JSON.stringify(small))
+  const wide = M.fitBox(800, 200, 600, room)
+  check('fit: a box wider than the default window grows the window first (100 %)', wide.scale === 1 && wide.fits && wide.w === 824, JSON.stringify(wide))
+  const tall = M.fitBox(400, 700, 600, room)
+  check('fit: a tall box is read smaller until it fits', tall.fits && tall.scale < 1 && tall.scale >= 0.75 && tall.h <= 600, JSON.stringify(tall))
+  const huge = M.fitBox(400, 2000, 600, room)
+  check('fit: never below the floor — past it the window scrolls', huge.scale === 0.75 && !huge.fits && huge.h === 600, JSON.stringify(huge))
+  // A figure is shown whole: its floor is half the 100 % scale
+  const figure = M.fitBox(400, 1000, 600, room, 0.5)
+  check('fit: a tall figure is read smaller rather than scrolled, down to its floor', figure.fits && figure.scale >= 0.5 && figure.scale < 0.75, JSON.stringify(figure))
+  check('fit: past the figure floor it scrolls after all', M.fitBox(400, 2000, 600, room, 0.5).scale === 0.5 && !M.fitBox(400, 2000, 600, room, 0.5).fits)
+}
+
+// ---------------- tier 1e: the cut-out's edges on a tight page (round 5)
+// Emil's thesis, 2026-10-17: footnotes at 10 pt on 9.25 pt. The window's air
+// is blank paper now, so the box's own edges are all that may show — and
+// entryBox's generous reach ran into the neighbours on both sides.
+{
+  // The page as the thesis set it (PDF y up): a body line, the footnote rule,
+  // footnote 6 over two lines, footnote 7 with a formula
+  const lines = [
+    T(72, 523, 118.6, 'acquisition. Bunnpris has maintained a small but growing presence', 11.96),
+    T(88.8, 523, 99.2, '6Bunnpris is the largest retail chain outside the four umbrella chains', 9.96),
+    T(72, 147, 83.6, 'NorgesGruppen.', 9.96),
+    T(88.8, 485, 74.4, '7Ownership concentration is measured using the HHI', 10.38),
+    T(479, 509, 67.7, 'i=1(Si)', 10.38),
+    T(72, 320, 58.8, '[0, 1], where Si is the market share of firm i in decimals.', 10.38)
+  ]
+  const fn6 = lines.slice(1, 3)
+  const box6 = M.entryBox(fn6)
+  check('tight page: entryBox alone reaches into footnote 7\'s capitals', box6.bottom < 74.4 + 10.38 * 0.72)
+  const clear6 = M.clearOfNeighbours(box6, lines, fn6)
+  // Their glyphs overlap here: footnote 7's capitals reach above footnote 6's
+  // descenders. The target comes out whole (Emil, 2026-10-17: a cut «g» was
+  // worse than a tip of the neighbour), so the edge stops at its own
+  check('footnote 6 kept off footnote 7 only as far as its own descenders allow', clear6.bottom > box6.bottom && near(clear6.bottom, 83.6 - 9.96 * 0.3, 0.01) && clear6.top === box6.top, JSON.stringify(clear6))
+  const fn7 = lines.slice(3)
+  const box7 = M.entryBox(fn7)
+  check('tight page: footnote 6\'s last baseline lies INSIDE footnote 7\'s box', 83.6 < box7.top && 83.6 > box7.bottom)
+  const clear7 = M.clearOfNeighbours(box7, lines, fn7)
+  check('footnote 7 kept off «NorgesGruppen.» once its own lines are named', clear7.top < box7.top && clear7.top < 83.6, JSON.stringify(clear7))
+  check('…but never past its own raised marker', clear7.top >= 74.4 + 10.38 * 0.88 - 0.01, JSON.stringify(clear7))
+  check('without its lines named, a baseline inside the box counts as the target\'s', M.clearOfNeighbours(box7, lines).top === box7.top)
+  const rule = [{ x0: 72, y0: 107.2, x1: 252.5, y1: 107.2 }]
+  const under = M.belowFootnoteRule(clear6, rule)
+  check('footnote rule: the box stops under it', near(under.top, 107.2 - 1.5, 0.01) && under.bottom === clear6.bottom, JSON.stringify(under))
+  check('footnote rule: a rule far above, or a short tick, is not it', M.belowFootnoteRule(clear6, [{ x0: 72, y0: 140, x1: 252, y1: 140 }]).top === clear6.top && M.belowFootnoteRule(clear6, [{ x0: 72, y0: 107, x1: 80, y1: 107 }]).top === clear6.top)
+}
+{
+  // A caption whose label is set larger than its words (12 pt, then 10)
+  // keeps its second line
+  const lines = []
+  for (let i = 0; i < 4; i++) lines.push(T(72, 523, 720 - i * 18, PROSE, 12))
+  lines.push(T(72, 523, 335.5, 'Figure 1.1: Evolution of market shares and the HHI by umbrella', 12), T(72, 239, 323.6, 'chain, 2001–2020. Source: AC Nielsen.'))
+  for (let i = 0; i < 4; i++) lines.push(T(72, 523, 290 - i * 18, PROSE, 12))
+  const box = M.floatBox('figure', { x: 72, y: 683 }, lines, [{ x0: 90, y0: 365, x1: 510, y1: 660 }], { w: 595, h: 842 })
+  check('caption label larger than its text: the second line comes along', box && near(box.bottom, 323.6 - 3.5), JSON.stringify(box))
+}
+{
+  // A table's notes under it are the table's
+  const lines = [T(72, 523, 700, 'Table A5: Descriptive statistics: treatment and control groups', 12)]
+  for (let i = 0; i < 8; i++) lines.push(T(72, 523, 670 - i * 15.5, 'Sales (millions NOK) 2.68 2.97 10.82% 3.19 3.19 0.00%'))
+  lines.push(T(72, 523, 530, 'Notes: This table reports mean values of outcome and control variables'), T(72, 523, 518, 'before the first and after the last rebranding.'), T(72, 300, 506, 'Demographic variables are from 2014.'))
+  lines.push(T(72, 523, 470, PROSE, 12))
+  const rules = [{ x0: 72, y0: 690, x1: 523, y1: 690 }, { x0: 72, y0: 555, x1: 523, y1: 555 }]
+  const float = M.floatBox('table', { x: 72, y: 712 }, lines, rules, { w: 595, h: 842 })
+  const box = float && M.withFloatNotes(float, lines)
+  check('table notes: «Notes: …» under the table joins it, to its last line', box && near(box.bottom, 506 - 3.5) && box.top === float.top, JSON.stringify({ float, box }))
+  check('table notes: the body text after them stays out', box && box.bottom > 470 + 12)
+  check('no notes: a box with prose under it is unchanged', M.withFloatNotes(float, lines.filter((l) => !/^(Notes|before|Demographic)/.test(l.text))) === float)
+}
+{
+  // A landscape page (/Rotate 90) whose text is drawn turned so it reads
+  // upright as shown: read in the shown frame, the box carried back
+  const W = 595, H = 842
+  const vp = {
+    width: H, height: W, scale: 1, rotation: 90, viewBox: [0, 0, W, H],
+    // pdf.js's /Rotate 90 at scale 1: shown x = PDF y, shown y = PDF x
+    convertToViewportPoint: (x, y) => [y, x],
+    convertToPdfPoint: (vx, vy) => [vy, vx]
+  }
+  const f = M.viewFrame(vp, W, H)
+  check('view frame: a turned page is read at its shown size', f.w === H && f.h === W)
+  // A run drawn turned in PDF space (up the page) reads left-to-right as shown
+  const items = f.items([{ str: 'Table A5: Descriptive statistics', transform: [0, 12, -12, 0, 100, 60], width: 200 }])
+  const up = M.uprightItems(items)
+  check('view frame: text drawn turned is upright as shown', up.length === 1 && up[0].transform[0] === 12 && up[0].transform[4] === 60 && up[0].transform[5] === W - 100, JSON.stringify(up[0]?.transform))
+  const back = f.back({ x0: 60, x1: 260, top: W - 90, bottom: W - 300 })
+  check('view frame: a box carried back covers the same page area', near(back.x0, 90) && near(back.x1, 300) && near(back.bottom, 60) && near(back.top, 260), JSON.stringify(back))
+  const flat = M.viewFrame({ ...vp, rotation: 0 }, W, H)
+  check('view frame: an upright page is read in PDF space, untouched', flat.w === W && flat.h === H && flat.point({ x: 1, y: 2 }).y === 2)
+}
+
+{
+  // «Søk»: what the card row asks Google Scholar
+  const aea = 'Aguzzoni, Luca, Elena Argentesi, Lorenzo Ciari, Tomaso Duso, and Massimo Tognoni. 2016. “Ex post Merger Evaluation in the U.K. Retail Market for Books.” The Journal of Industrial Economics, 64(1): 170–200.'
+  check('scholar query: a quoted title, the first author and the year', M.scholarQuery(aea) === 'Ex post Merger Evaluation in the U.K. Retail Market for Books Aguzzoni 2016', M.scholarQuery(aea))
+  const numbered = '[12] K. He, X. Zhang, S. Ren, and J. Sun. Deep residual learning for image recognition. In CVPR, 2016. https://doi.org/10.1109/CVPR.2016.90'
+  check('scholar query: no quotes — the entry itself, its DOI and URL left out', M.scholarQuery(numbered) === '[12] K. He, X. Zhang, S. Ren, and J. Sun. Deep residual learning for image recognition. In CVPR, 2016.', M.scholarQuery(numbered))
+  const url = M.scholarUrl('a & b?#c')
+  check('scholar url: Google Scholar, the query encoded so it cannot reshape the URL', url === 'https://scholar.google.com/scholar?q=a%20%26%20b%3F%23c', url)
+}
+
 // ------------------------------------------------------ tier 2: real pdf.js
 const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
 pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href
@@ -391,6 +835,13 @@ function namedDestFixture() {
   const target = await M.resolvePreviewTarget(doc, 'cite.adams')
   const entry = await M.citationEntryText(doc, target)
   check('real pdf.js: the entry ends at the next destination', entry === 'Adams, A. (2001). First paper title here.\nJournal of Things 1, 1-10.', JSON.stringify(entry))
+  // The citation card reads the same table: the whole family in list order,
+  // and each entry as one paragraph of text
+  const fam = await M.familyDests(doc, M.destFamily('cite.adams'))
+  check('real pdf.js: the family in list order, pages resolved', fam.map((d) => `${d.name}@${d.pageIndex}`).join() === 'cite.adams@0,cite.brown@0', JSON.stringify(fam))
+  const card = await M.cardEntries(doc, fam, fam)
+  check('real pdf.js: one card row per entry, as text', card.length === 2 && card[0].segments.map((s) => s.text).join('') === 'Adams, A. (2001). First paper title here. Journal of Things 1, 1-10.', JSON.stringify(card.map((c) => c.segments)))
+  check('real pdf.js: a card row keeps the lookup text line by line', card[0].text === entry)
 }
 {
   const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(SAMPLE)), verbosity: 0 }).promise

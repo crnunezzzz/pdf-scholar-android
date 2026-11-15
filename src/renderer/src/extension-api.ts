@@ -22,6 +22,7 @@ import type {
   DocBookmark,
   FilePayload,
   FileError,
+  GoneDocument,
   PdfxApi,
   ReadingPosition,
   RecentFile,
@@ -36,6 +37,14 @@ import {
   thumbReadableInExtension
 } from '../../shared/recent-thumbs'
 import { forgetRecentThumbs, loadRecentThumbs, saveRecentThumb } from './extension-recent-thumbs'
+import {
+  listConversationDocs,
+  loadConversationDoc,
+  saveConversationDoc,
+  subscribeConversationChanges
+} from './extension-chat-history'
+import { rebindIdentity, sanitizeFingerprints, validFingerprint } from '../../shared/doc-identity'
+import { searchConversations, toMeta } from '../../shared/chat-history'
 import { offersInsecureRetry } from '../../shared/insecure-retry'
 import { buildAssistantUrl, buildViewerUrl, parseViewerTarget, pdfDisplayName } from '../../shared/viewer-url'
 import { createZoteroClient, httpZoteroFetch } from '../../shared/zotero'
@@ -74,6 +83,8 @@ const K_SETTINGS = 'pdfx-settings'
 const K_POSITIONS = 'pdfx-positions'
 const K_BOOKMARKS = 'pdfx-bookmarks'
 const K_RECENTS = 'pdfx-recents'
+/** Each opened document's /ID[0] by path (shared/doc-identity.ts, issue #46) */
+const K_FINGERPRINTS = 'pdfx-fingerprints'
 /** Why the last document was handed to the browser's own reader — the only trace
  *  of a hand-off that is deliberately invisible (see openInBrowserViewer). */
 const K_LAST_FALLBACK = 'pdfx-last-fallback'
@@ -137,6 +148,21 @@ async function updateRecents(change: (list: RecentFile[]) => RecentFile[]): Prom
   const next = change(await loadRecents())
   store.set(K_RECENTS, next)
   return next
+}
+
+/** Whether the file behind a path is KNOWN to be gone (issue #46). Only a
+ *  file:// URL with file access granted can be: an http(s) URL that fails may
+ *  be offline, an fsa: handle needs a gesture to read — both read as present,
+ *  so nothing is ever moved or forgotten on their account. */
+async function knownGone(path: string): Promise<boolean> {
+  if (!/^file:/i.test(path) || (await fileAccessGranted()) !== true) return false
+  try {
+    const res = await fetch(path)
+    void res.body?.cancel()
+    return !res.ok
+  } catch {
+    return true
+  }
 }
 
 function recordRecent(payload: { path: string; name: string }): void {
@@ -318,6 +344,120 @@ export function createExtensionApi(base: PdfxApi): PdfxApi {
         else next[path] = bookmarks
         return store.set(K_BOOKMARKS, next)
       })
+    },
+    // The AI conversations (issue #46) — IndexedDB, see extension-chat-history.ts.
+    // Same contract as desktop's main process: one record per document,
+    // nothing evicted, other tabs told over a BroadcastChannel.
+    getConversations: loadConversationDoc,
+    setConversations: saveConversationDoc,
+    listConversations: async () => (await listConversationDocs()).map(toMeta),
+    // In the page itself — the extension's store lives here, there is no
+    // process boundary to keep the text from crossing
+    searchConversations: async (query) => searchConversations(await listConversationDocs(), query),
+    onConversationsChanged: subscribeConversationChanges,
+    // The MCP server is a process an AI tool starts on its own; an extension
+    // has nothing it could start (docs/PLATFORMS.md). «Kopier for KI» works
+    // here as on the desktop — it needs no store.
+    setDocNotes: async () => {},
+    mcpStatus: async () => null,
+    mcpConnect: async () => ({ ok: false, code: 'mcp-unsupported', error: 'extension' }),
+    mcpPolicy: async () => null,
+    mcpSetPolicy: async () => null,
+    mcpPickFolder: async () => null,
+    mcpDocuments: async () => [],
+    notesBackfillTargets: async () => [],
+
+    // A document's identity across a move (issue #46; shared/doc-identity.ts).
+    // Only a file:// URL can be known to be GONE here, and only with file
+    // access granted: an http(s) URL that fails may be offline, an fsa: handle
+    // needs a gesture to read — both read as present, so nothing moves.
+    docIdentity: async (path, name, fingerprint) => {
+      if (!validFingerprint(fingerprint)) return []
+      const map = sanitizeFingerprints(await store.get<unknown>(K_FINGERPRINTS, {}))
+      const result = await rebindIdentity(path, name, fingerprint, map, {
+        exists: async (p) => !(await knownGone(p)),
+        position: {
+          get: async (p) => (await store.get<Record<string, ReadingPosition>>(K_POSITIONS, {}))[p] ?? null,
+          set: async (p, pos) => {
+            const all = { ...(await store.get<Record<string, ReadingPosition>>(K_POSITIONS, {})) }
+            if (pos) all[p] = pos
+            else delete all[p]
+            store.set(K_POSITIONS, all)
+          }
+        },
+        bookmarks: {
+          get: async (p) => (await store.get<Record<string, DocBookmark[]>>(K_BOOKMARKS, {}))[p] ?? [],
+          set: async (p, list) => {
+            const all = { ...(await store.get<Record<string, DocBookmark[]>>(K_BOOKMARKS, {})) }
+            if (list.length > 0) all[p] = list
+            else delete all[p]
+            store.set(K_BOOKMARKS, all)
+          }
+        },
+        conversations: { get: loadConversationDoc, set: saveConversationDoc },
+        recents: {
+          takeOut: async (p) => {
+            const entry = (await loadRecents()).find((r) => r.path === p)
+            if (!entry) return { pinned: false }
+            await updateRecents((list) => removeRecent(list, p))
+            await forgetRecentThumbs([p])
+            return { pinned: entry.pinnedAt !== undefined }
+          },
+          pin: async (p) => {
+            await updateRecents((list) => pinRecent(list, p, true, Date.now()))
+          }
+        }
+      })
+      store.set(K_FINGERPRINTS, result.map)
+      return result.from
+    },
+
+    // The library's tidying (issue #46) — the same «gone» as above, over every
+    // path this extension keeps anything for
+    goneDocuments: async () => {
+      const [summaries, positions, bookmarks, fingerprints, recents] = await Promise.all([
+        listConversationDocs(),
+        store.get<Record<string, ReadingPosition>>(K_POSITIONS, {}),
+        store.get<Record<string, DocBookmark[]>>(K_BOOKMARKS, {}),
+        store.get<Record<string, string>>(K_FINGERPRINTS, {}),
+        loadRecents()
+      ])
+      const counts = new Map<string, { name: string; n: number }>()
+      for (const s of summaries) {
+        const c = counts.get(s.docPath) ?? { name: s.docName, n: 0 }
+        c.n++
+        counts.set(s.docPath, c)
+      }
+      const paths = new Set([
+        ...counts.keys(),
+        ...Object.keys(positions),
+        ...Object.keys(bookmarks),
+        ...Object.keys(fingerprints),
+        ...recents.map((r) => r.path)
+      ])
+      const out: GoneDocument[] = []
+      for (const p of [...paths].sort()) {
+        if (!(await knownGone(p))) continue
+        const recent = recents.find((r) => r.path === p)
+        out.push({
+          path: p,
+          name: counts.get(p)?.name ?? recent?.name ?? fileNameOf(p),
+          conversations: counts.get(p)?.n ?? 0,
+          other: p in positions || p in bookmarks || !!recent
+        })
+      }
+      return out
+    },
+    forgetDocuments: async (paths) => {
+      const drop = new Set(paths)
+      const strip = <T,>(all: Record<string, T>): Record<string, T> =>
+        Object.fromEntries(Object.entries(all).filter(([k]) => !drop.has(k)))
+      store.set(K_POSITIONS, strip(await store.get<Record<string, ReadingPosition>>(K_POSITIONS, {})))
+      store.set(K_BOOKMARKS, strip(await store.get<Record<string, DocBookmark[]>>(K_BOOKMARKS, {})))
+      store.set(K_FINGERPRINTS, strip(await store.get<Record<string, string>>(K_FINGERPRINTS, {})))
+      await updateRecents((list) => list.filter((r) => !drop.has(r.path)))
+      await forgetRecentThumbs(paths)
+      for (const p of paths) await saveConversationDoc(p, '', [])
     },
     // Heal names written before fileNameOf existed (picked files were stored as
     // "fsa:<name>" because the name was derived from the pseudo-path). The cap

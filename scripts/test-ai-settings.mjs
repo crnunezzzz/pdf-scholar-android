@@ -130,6 +130,9 @@ try {
       settingsShown: !!document.querySelector('.ai-settings'),
       groups: document.querySelectorAll('.ai-field-group').length,
       groupNames,
+      // The AI tools on this machine have their own dialog (AiToolsDialog.tsx)
+      // since 2026-10-29 — nothing of them here among the keys
+      mcpHere: !!document.querySelector('.ai-settings .ai-mcp, .ai-settings .ai-tools-row'),
       hasCompatGroup: !!g,
       presets: g ? [...g.querySelectorAll('select option')].map((o) => o.textContent) : [],
       keyPlaceholder: g?.querySelector('input[type="password"]')?.placeholder ?? '',
@@ -149,6 +152,7 @@ try {
   // KI-tilgang (the access switch) sits first, then the ten provider groups —
   // the ChatGPT-plan sign-in right under the OpenAI key it is the keyless twin of
   ok(settings.groups === 11, `access group + ten provider groups render (got ${settings.groups})`)
+  ok(!settings.mcpHere, '«AI tools on this computer» is not among the keys and providers (its own dialog)')
   ok(
     /KI-tilgang|AI access/.test(settings.groupNames[0] ?? '') &&
       settings.groupNames[1] === 'OpenAI' &&
@@ -201,10 +205,13 @@ try {
     !after.buttons.some((b) => /[Nn]ettsøk|web search/i.test(b.title)),
     'no web-search globe for compat (capability profile)'
   )
+  // The vision-gated snip beside the paperclip (ai-attach-clip, 2026-10-24: one
+  // button for conversations, images and files; the image entry inside it is
+  // the gated one — the paperclip itself attaches text whatever the model sees)
   const attach = after.buttons.filter((b) => b.cls.includes('ai-attach-add'))
   ok(
-    attach.length === 2 && attach.every((b) => !b.disabled),
-    'snip + attach enabled (vision unknown → permissive)'
+    attach.length === 2 && attach.some((b) => b.cls.includes('ai-attach-clip')) && attach.every((b) => !b.disabled),
+    'paperclip + snip enabled (vision unknown → permissive)'
   )
 
   // The model menu with the server OFFLINE: configured id stays pickable,
@@ -231,6 +238,70 @@ try {
   ok(menu.selected === 'compat:llama3.1', `configured compat model is the picked row (got ${menu.selected})`)
   ok(menu.hasCompatOption, 'configured id stays pickable with the server offline')
   ok(menu.selects === 0, `reasoning selector hidden for a non-reasoning compat id (selects: ${menu.selects})`)
+
+  // ---------- A typed model id (shared/typed-model.ts) ----------
+  // With a key at a curated provider the search field is there even though the
+  // combined list is short, and an id typed into it becomes a «Bruk «…»» row
+  // at that provider — the escape hatch for a model the curation has not
+  // caught up with. The key is a throwaway string: nothing is sent anywhere.
+  // The key goes in behind React's back, so the menu is closed and reopened:
+  // on mount it refreshes the config through onSaved, which is how the panel
+  // learns of the key (the settings form does the same through its save).
+  await evaluate(send, `
+    await window.api.aiSetConfig({ keys: { openai: 'sk-test-typed-id' } })
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    for (let i = 0; i < 30 && document.querySelector('.ai-model-menu'); i++) await sleep(100)
+    document.querySelector('.ai-model').click()
+    for (let i = 0; i < 30 && !document.querySelector('.ai-model-menu input'); i++) await sleep(100)
+    await sleep(800) // the mount refresh lands the keyed config
+  `, PRELUDE)
+  const typed = await evaluate(send, `
+    const input = document.querySelector('.ai-model-menu input')
+    if (!input) return { field: false }
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    set.call(input, 'gpt-6.2-sol')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await sleep(200)
+    const rows = [...document.querySelectorAll('.ai-model-menu [data-menuitem]')]
+    const typedRows = rows.filter((r) => r.classList.contains('is-typed')).map((r) => ({
+      value: r.dataset.value, label: r.querySelector('.ai-menu-label')?.textContent ?? '', detail: r.querySelector('.ai-menu-detail')?.textContent ?? '', title: r.title
+    }))
+    const phraseRows = (() => { set.call(input, 'gpt 6'); input.dispatchEvent(new Event('input', { bubbles: true })); return null })()
+    await sleep(200)
+    const phraseTyped = document.querySelectorAll('.ai-model-menu .is-typed').length
+    set.call(input, 'gpt-6.2-sol'); input.dispatchEvent(new Event('input', { bubbles: true }))
+    await sleep(200)
+    return { field: true, typedRows, phraseTyped, placeholder: input.placeholder }
+  `, PRELUDE)
+  ok(typed.field, 'the search field shows once a curated provider is keyed')
+  ok(/modell-id|model id/.test(typed.placeholder ?? ''), `the placeholder invites a typed id (got «${typed.placeholder}»)`)
+  ok(
+    typed.typedRows?.length === 1 && typed.typedRows[0].value === 'openai:gpt-6.2-sol',
+    `exactly one typed row, at the keyed curated provider (got ${JSON.stringify(typed.typedRows)})`
+  )
+  ok(/gpt-6\.2-sol/.test(typed.typedRows?.[0]?.label ?? ''), 'the row names the id as typed')
+  ok(/OpenAI/.test(typed.typedRows?.[0]?.detail ?? '') && /ikke utprøvd|untested/.test(typed.typedRows?.[0]?.detail ?? ''), 'the row names the provider and says it is unverified')
+  ok(typed.phraseTyped === 0, `a search phrase with a space offers no typed row (got ${typed.phraseTyped})`)
+  const picked = await evaluate(send, `
+    document.querySelector('.ai-model-menu .is-typed').click()
+    for (let i = 0; i < 30 && !document.querySelector('.ai-model-menu [data-value="openai:gpt-6.2-sol"][aria-checked="true"]'); i++) await sleep(100)
+    const menu = document.querySelector('.ai-model-menu')
+    return {
+      picked: menu?.querySelector('[data-value="openai:gpt-6.2-sol"]')?.getAttribute('aria-checked') === 'true',
+      listedUnderOpenAI: !!menu?.querySelector('[data-value="openai:gpt-6.2-sol"]'),
+      filterCleared: (menu?.querySelector('input')?.value ?? '') === '',
+      chip: document.querySelector('.ai-model-name')?.textContent ?? ''
+    }
+  `, PRELUDE)
+  ok(picked.picked && picked.listedUnderOpenAI, 'picking the row stores the id and keeps it listed under its provider')
+  ok(picked.filterCleared, 'the pick clears the search')
+  ok(/GPT-6\.2 Sol/.test(picked.chip), `the header chip names the typed model (got «${picked.chip}»)`)
+  // Back to the compat state the rest of the run expects — and the throwaway
+  // key out of the profile
+  await evaluate(send, `
+    await window.api.aiSetConfig({ provider: 'compat', keys: { openai: '' } })
+    await sleep(200)
+  `, PRELUDE)
 
   // ---------- KI-tilgang (the dead-man switch) ----------
   // The settings select carries the mode; 'off' must gate the TRANSPORT (a
