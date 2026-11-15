@@ -1327,12 +1327,14 @@ export default function Toolbar({
     { key: 'shapes', icon: <IconShapes size={15} />, label: t('tb.shapes'), onClick: () => setToolMenu((m) => (m === 'shape' ? null : 'shape')), active: shapeActive, opts: 'shape', disabled: toolsLocked },
     { key: 'text', icon: <IconText size={15} />, label: t('tb.textTool'), onClick: () => onToolSelect(activeTool === 'text' ? null : 'text'), active: activeTool === 'text', opts: 'text', disabled: toolsLocked },
     { key: 'eraser', icon: <IconEraser size={15} />, label: t('tb.eraser'), onClick: () => onToolSelect('eraser'), active: activeTool === 'eraser', opts: 'eraser', disabled: toolsLocked },
-    { key: 'markup', icon: <IconTextMarkup size={15} />, label: t('tb.markup'), onClick: () => onMarkupSelect(activeMarkup ? null : markupType), active: !!activeMarkup, opts: 'markup', disabled: toolsLocked },
-    { key: 'marker', icon: <IconMarker size={15} />, label: t('tb.marker'), onClick: () => onToolSelect(activeTool === 'marker' ? null : 'marker'), active: activeTool === 'marker', opts: 'marker', disabled: toolsLocked },
-    { key: 'pen', icon: <IconPen size={15} />, label: t('tb.pen'), onClick: () => onToolSelect(activeTool === 'pen' ? null : 'pen'), active: activeTool === 'pen', opts: 'pen', disabled: toolsLocked },
+    // Folds before the markup, marker and pen buttons: those draw, this
+    // only routes the finger
     ...(HAS_TOUCH
       ? [{ key: 'penonly', icon: <IconStylus size={15} />, label: t('tb.penOnly'), onClick: () => onFingerDrawsChange(!fingerDraws), active: !fingerDraws }]
       : []),
+    { key: 'markup', icon: <IconTextMarkup size={15} />, label: t('tb.markup'), onClick: () => onMarkupSelect(activeMarkup ? null : markupType), active: !!activeMarkup, opts: 'markup', disabled: toolsLocked },
+    { key: 'marker', icon: <IconMarker size={15} />, label: t('tb.marker'), onClick: () => onToolSelect(activeTool === 'marker' ? null : 'marker'), active: activeTool === 'marker', opts: 'marker', disabled: toolsLocked },
+    { key: 'pen', icon: <IconPen size={15} />, label: t('tb.pen'), onClick: () => onToolSelect(activeTool === 'pen' ? null : 'pen'), active: activeTool === 'pen', opts: 'pen', disabled: toolsLocked },
     { key: 'hand', icon: <IconHand size={15} />, label: t('tb.hand'), onClick: onToggleHand, active: handTool, opts: 'hand' },
     { key: 'present', icon: <IconPresent size={15} />, label: t('tb.present'), onClick: onPresent },
     // On Android the fullscreen button never folds: it is the phone's way into
