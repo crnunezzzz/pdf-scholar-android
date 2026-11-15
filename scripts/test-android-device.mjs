@@ -336,7 +336,10 @@ await ev(`(() => { window.__tapEv = []; for (const t of ['pointerdown', 'pointer
 await touch([econ])
 await sleep(500)
 console.log('events of the tap:', JSON.stringify(await ev('window.__tapEv')))
-console.log('active tab after the tap:', await ev(`document.querySelector('.tab.active .tab-label')?.textContent.trim()`))
+console.log('active tab after the tap:', await ev(`document.querySelector('.tab.active .tab-label')?.textContent.trim()`), '· tab menu open:', await ev(`!!document.querySelector('.tab-menu')`))
+// A tap read as a hold opens the tab's menu instead (tab-touch-drag.ts): close it
+// so the rest of the run is not under it
+if (await ev(`!!document.querySelector('.tab-menu')`)) await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
 await waitFor(`new Set([...document.querySelectorAll('${ACTIVE} [data-dockey]')].map((e) => e.dataset.dockey)).size === 1`)
 await sleep(800)
 check('economia\'s tab shows economia again', ...(await showsWhen(ACTIVE, 'economia.pdf')))

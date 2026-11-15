@@ -25,6 +25,9 @@ export interface TabTouchDragOptions {
   name: string
   /** The drag has begun (the strip marks the tab as the one moving) */
   onStart(): void
+  /** What onStart began ended without a drag (a hold, or a tap read late):
+   *  the strip lets go of the moving tab */
+  onAbort(): void
   /** A hold released in place: the tab's menu, at that point */
   onLongPress(x: number, y: number): void
   /** The strip overflows and scrolls sideways: a sideways swipe is a scroll,
@@ -109,8 +112,16 @@ export function startTabTouchDrag(down: PointerEvent, tabEl: HTMLElement, opts: 
   const onUp = (e: PointerEvent): void => {
     if (e.pointerId !== down.pointerId) return
     if (started && !moved) {
+      // The hold timer can run AFTER a quick tap's finger has lifted: a page
+      // busy redrawing (a split just closed, a document loading) queues both,
+      // and the timer may come first. By the events' own clocks that was a
+      // tap — the tab is selected, no menu opens (seen on the tablet emulator:
+      // the tap opened the menu and the click was swallowed)
+      const tap = e.timeStamp - down.timeStamp < HOLD_MS
+      started = !tap
       finish(false)
-      opts.onLongPress(e.clientX, e.clientY)
+      opts.onAbort()
+      if (!tap) opts.onLongPress(e.clientX, e.clientY)
       return
     }
     if (started && target && accepted) fire(target, 'drop', e.clientX, e.clientY)

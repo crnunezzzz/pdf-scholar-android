@@ -521,6 +521,7 @@ export default function TabBar({
                 path: tab.path,
                 name: tab.name,
                 onStart: () => setDraggingId(tab.id),
+                onAbort: () => setDraggingId(null),
                 onLongPress: (x, y) => setMenu({ x, y, tab }),
                 stripScrolls: !stripFits
               })
