@@ -327,7 +327,14 @@ await pressSplit()
 await waitFor(`!document.querySelector('${ACTIVE} [data-pane="b"]')`, 6000)
 check('the split closes: calculo alone again (8 pages)', ...(await shows(ACTIVE, 'calculo.pdf')))
 // Economia's own tab, so the stroke lands in that file
-await tap(`.tab-label`) // economia's tab
+// (the strip names a tab without «.pdf» since upstream 0.8x). What the tap
+// meets is logged: a layer over the strip would swallow it silently
+const econ = await ev(`(() => { const b = [...document.querySelectorAll('.tab-label')].find((x) => x.textContent.trim().startsWith('economia')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+if (!econ) throw new Error('no tab for economia')
+console.log('economia tab: the tap meets', await ev(`(() => { const e = document.elementFromPoint(${econ.x}, ${econ.y}); return e ? e.tagName + '.' + [...e.classList].join('.') + ' in ' + (e.closest('[class]')?.parentElement?.className ?? '') : 'nothing' })()`))
+await touch([econ])
+await sleep(500)
+console.log('active tab after the tap:', await ev(`document.querySelector('.tab.active .tab-label')?.textContent.trim()`))
 await waitFor(`new Set([...document.querySelectorAll('${ACTIVE} [data-dockey]')].map((e) => e.dataset.dockey)).size === 1`)
 await sleep(800)
 check('economia\'s tab shows economia again', ...(await showsWhen(ACTIVE, 'economia.pdf')))
@@ -397,7 +404,7 @@ if (showThree) {
   shot('6c-mosaic-landscape')
   // A finger drags calculo's tab onto the large tile: calculo and historia
   // trade places (tab-touch-drag.ts on a real touch screen)
-  const from = await ev(`(() => { const r = [...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('calculo.pdf')).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+  const from = await ev(`(() => { const r = [...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('calculo')).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
   const to = await centre('.tab-views.mosaic .tile-main')
   await touch(Array.from({ length: 21 }, (_, i) => ({ x: from.x + ((to.x - from.x) * i) / 20, y: from.y + ((to.y - from.y) * i) / 20 })))
   await sleep(2500)
@@ -418,9 +425,10 @@ adb('shell', 'am', 'force-stop', PKG)
 adb('shell', 'am', 'start', '-W', '-n', `${PKG}/.MainActivity`)
 await connect()
 check('after a restart all three tabs are back', await waitFor(`document.querySelectorAll('.tab-label').length === 3`, 30000), (await tabNames()).join(' | '))
-check('…with their names', [...(await tabNames())].join() === 'economia.pdf,calculo.pdf,historia.pdf', (await tabNames()).join(' | '))
+check('…with their names', [...(await tabNames())].join().replace(/\.pdf/g, '') === 'economia,calculo,historia', (await tabNames()).join(' | '))
 check('…and the shown one draws its page', await waitInk(30000))
-const shown = (await ev(`document.querySelector('.tab.active .tab-label')?.textContent.trim()`)) ?? ''
+const shownName = (await ev(`document.querySelector('.tab.active .tab-label')?.textContent.trim()`)) ?? ''
+const shown = shownName.endsWith('.pdf') ? shownName : `${shownName}.pdf`
 if (DOCS[shown]) check(`…its own document (${shown})`, ...(await showsWhen(ACTIVE, shown, 30000)))
 else check('…a tab is shown', false, shown)
 shot('7-restarted')

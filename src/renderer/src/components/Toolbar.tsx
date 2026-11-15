@@ -127,6 +127,7 @@ import {
   IconFitWidth,
   IconFullscreen,
   IconHand,
+  IconStylus,
   IconGear,
   IconComment,
   IconHeart,
@@ -1329,6 +1330,9 @@ export default function Toolbar({
     { key: 'markup', icon: <IconTextMarkup size={15} />, label: t('tb.markup'), onClick: () => onMarkupSelect(activeMarkup ? null : markupType), active: !!activeMarkup, opts: 'markup', disabled: toolsLocked },
     { key: 'marker', icon: <IconMarker size={15} />, label: t('tb.marker'), onClick: () => onToolSelect(activeTool === 'marker' ? null : 'marker'), active: activeTool === 'marker', opts: 'marker', disabled: toolsLocked },
     { key: 'pen', icon: <IconPen size={15} />, label: t('tb.pen'), onClick: () => onToolSelect(activeTool === 'pen' ? null : 'pen'), active: activeTool === 'pen', opts: 'pen', disabled: toolsLocked },
+    ...(HAS_TOUCH
+      ? [{ key: 'penonly', icon: <IconStylus size={15} />, label: t('tb.penOnly'), onClick: () => onFingerDrawsChange(!fingerDraws), active: !fingerDraws }]
+      : []),
     { key: 'hand', icon: <IconHand size={15} />, label: t('tb.hand'), onClick: onToggleHand, active: handTool, opts: 'hand' },
     { key: 'present', icon: <IconPresent size={15} />, label: t('tb.present'), onClick: onPresent },
     // On Android the fullscreen button never folds: it is the phone's way into
@@ -1811,6 +1815,19 @@ export default function Toolbar({
             The hand stays OUTSIDE the fieldset: it draws nothing, so a
             document that takes no marks may still be dragged. */}
         <div className="tool-cluster" ref={toolMenuRef}>
+        {/* «Only the pen draws» (touch screens): the finger scrolls and
+            zooms whatever tool is armed, and only a stylus writes — the same
+            setting as the tool menus' «Finger» row, one tap away */}
+        {HAS_TOUCH && inline('penonly') && (
+          <button
+            className={`tb-btn${!fingerDraws ? ' is-active' : ''}`}
+            onClick={() => onFingerDrawsChange(!fingerDraws)}
+            title={t(fingerDraws ? 'tb.penOnlyOffTip' : 'tb.penOnlyOnTip')}
+            aria-pressed={!fingerDraws}
+          >
+            <IconStylus />
+          </button>
+        )}
         {inline('hand') && (
           <span className="tb-split">
             <button

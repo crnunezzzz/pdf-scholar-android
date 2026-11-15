@@ -116,6 +116,15 @@ export const IconHand = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
+/** «Only the pen draws»: a slim stylus writing its line — the tablet apps'
+ *  «stylus only» mark, unlike the pen tool's broad pencil */
+export const IconStylus = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M17.5 2.5l2 2L9 15l-3 1 1-3z" />
+    <path d="M3 21c2-2.5 3.5-2.5 4.5-1s2.5 1.5 4-.5 3-2 4.5-.5 2.5 1 4.5-1" />
+  </Svg>
+)
+
 /** Toolbar pinned: an angled thumbtack, driven in */
 export const IconPin = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
