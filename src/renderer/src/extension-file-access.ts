@@ -19,6 +19,10 @@
  *  the test. */
 const K_DISMISSED = 'pdfx-file-access-dismissed'
 
+/** The `chrome` global where there is one. The Android WebView (and a page
+ *  outside Chromium) has none at all, and merely naming it would throw. */
+const chromeApi = (): typeof chrome | undefined => (typeof chrome !== 'undefined' ? chrome : undefined)
+
 /** Whether the browser lets us read `file://` URLs.
  *
  *  `null` means we cannot tell — not an extension page, or a browser without
@@ -27,7 +31,7 @@ const K_DISMISSED = 'pdfx-file-access-dismissed'
  *  (the renderer is shared) and in front of anyone whose browser never had the
  *  restriction. */
 export async function fileAccessGranted(): Promise<boolean | null> {
-  const ext = chrome?.extension
+  const ext = chromeApi()?.extension
   if (!ext?.isAllowedFileSchemeAccess) return null
   try {
     return await ext.isAllowedFileSchemeAccess()
@@ -51,7 +55,7 @@ export function extensionDetailsUrl(userAgent: string, id: string): string {
 
 /** The details page for THIS extension in THIS browser. */
 export function detailsUrl(): string {
-  return extensionDetailsUrl(navigator.userAgent, chrome?.runtime?.id ?? '')
+  return extensionDetailsUrl(navigator.userAgent, chromeApi()?.runtime?.id ?? '')
 }
 
 /** Open the details page in a new tab. `false` = the browser refused (an
@@ -59,9 +63,9 @@ export function detailsUrl(): string {
  *  builds block it from `tabs.create` too) — the notice then shows the address
  *  for the user to paste, which always works. */
 export async function openExtensionDetails(): Promise<boolean> {
-  if (!chrome?.tabs?.create || !chrome.runtime?.id) return false
+  if (!chromeApi()?.tabs?.create || !chromeApi()?.runtime?.id) return false
   try {
-    await chrome.tabs.create({ url: detailsUrl(), active: true })
+    await chromeApi()?.tabs?.create({ url: detailsUrl(), active: true })
     return true
   } catch {
     return false
@@ -76,7 +80,7 @@ export async function openExtensionDetails(): Promise<boolean> {
  *  back. False when there is no extension runtime at all (desktop, dev:web) —
  *  there is nothing to lose there. */
 export function extensionContextLost(): boolean {
-  return !!chrome?.runtime && !chrome.runtime.id
+  return !!chromeApi()?.runtime && !chromeApi()?.runtime.id
 }
 
 /** Whether the user waved the welcome-screen card away. Only that card honours
@@ -84,7 +88,7 @@ export function extensionContextLost(): boolean {
  *  there the switch is the difference between reading the document and not. */
 export async function fileAccessNoticeDismissed(): Promise<boolean> {
   try {
-    const got = await chrome?.storage?.local.get(K_DISMISSED)
+    const got = await chromeApi()?.storage?.local.get(K_DISMISSED)
     return got?.[K_DISMISSED] === true
   } catch {
     return false
@@ -92,5 +96,5 @@ export async function fileAccessNoticeDismissed(): Promise<boolean> {
 }
 
 export function dismissFileAccessNotice(): void {
-  void chrome?.storage?.local.set({ [K_DISMISSED]: true })
+  void chromeApi()?.storage?.local.set({ [K_DISMISSED]: true })
 }

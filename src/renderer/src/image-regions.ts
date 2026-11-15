@@ -63,6 +63,12 @@ export interface UserRect {
    *  «Kopier bilde» re-render a figure at the resolution the file actually
    *  holds instead of at whatever the screen happens to show. */
   px?: { w: number; h: number }
+  /** Where pdf.js keeps the decoded pixels: an image XObject's object id, or
+   *  an inline image's data from the operator list — what OCR of a figure
+   *  reads instead of drawing the page again (ocr.ts) */
+  src?: { objId?: string; inline?: unknown }
+  /** Drawn without turning or mirroring: the bitmap's first row is the top */
+  upright?: boolean
 }
 
 /** The operator ids the walk needs — injected so the pure function can be
@@ -76,6 +82,10 @@ export interface OpsTable {
   paintImageXObjectRepeat: number
   paintFormXObjectBegin: number
   paintFormXObjectEnd: number
+  /** Needed only by pathRectsFromOps: a drawn path, and the no-paint end
+   *  that makes a path a clip and nothing on the page */
+  constructPath?: number
+  endPath?: number
 }
 
 /** Walk an operator list and return the user-space AABB of every raster image.
@@ -87,11 +97,39 @@ export function imageRectsFromOps(
   argsArray: ArrayLike<unknown>,
   ops: OpsTable
 ): UserRect[] {
+  return walkOps(fnArray, argsArray, ops).images
+}
+
+/** Every PAINTED path's user-space box — rules, axes, frames, the strokes
+ *  of a vector figure. The link preview reads a figure or a table off these
+ *  (link-preview.ts, floatBox): a vector figure has no image and often no
+ *  text inside, so its paths are the only sign of where it is. A path that
+ *  only clips (ended by `n`) paints nothing and is left out. pdf.js hands
+ *  each path over with its bounding box already in the CTM of the moment
+ *  (constructPath's third argument), so only that box goes through the CTM. */
+export function pathRectsFromOps(
+  fnArray: ArrayLike<number>,
+  argsArray: ArrayLike<unknown>,
+  ops: OpsTable
+): UserRect[] {
+  return walkOps(fnArray, argsArray, ops).paths
+}
+
+function walkOps(
+  fnArray: ArrayLike<number>,
+  argsArray: ArrayLike<unknown>,
+  ops: OpsTable
+): { images: UserRect[]; paths: UserRect[] } {
   const rects: UserRect[] = []
+  const paths: UserRect[] = []
   let ctm: Matrix = IDENTITY
   const stack: Matrix[] = []
 
-  const pushUnitSquare = (m: Matrix, px?: { w: number; h: number }): void => {
+  const pushUnitSquare = (
+    m: Matrix,
+    px?: { w: number; h: number },
+    src?: { objId?: string; inline?: unknown }
+  ): void => {
     const pts = [applyMatrix(m, 0, 0), applyMatrix(m, 1, 0), applyMatrix(m, 0, 1), applyMatrix(m, 1, 1)]
     const xs = pts.map((p) => p[0])
     const ys = pts.map((p) => p[1])
@@ -100,7 +138,9 @@ export function imageRectsFromOps(
       y0: Math.min(...ys),
       x1: Math.max(...xs),
       y1: Math.max(...ys),
-      ...(px && px.w > 0 && px.h > 0 ? { px } : {})
+      ...(px && px.w > 0 && px.h > 0 ? { px } : {}),
+      ...(src ? { src } : {}),
+      upright: m[0] > 0 && m[3] > 0 && Math.abs(m[1]) <= 1e-6 * m[0] && Math.abs(m[2]) <= 1e-6 * m[3]
     })
   }
 
@@ -132,12 +172,16 @@ export function imageRectsFromOps(
         break
       // args = [objId, w, h] — w/h are the image's own pixel dimensions
       case ops.paintImageXObject:
-        pushUnitSquare(ctm, pixelSize(args?.[1], args?.[2]))
+        pushUnitSquare(
+          ctm,
+          pixelSize(args?.[1], args?.[2]),
+          typeof args?.[0] === 'string' ? { objId: args[0] } : undefined
+        )
         break
       // args = [imgData], the decoded bitmap, which carries its own size
       case ops.paintInlineImageXObject: {
         const img = args?.[0] as { width?: unknown; height?: unknown } | undefined
-        pushUnitSquare(ctm, pixelSize(img?.width, img?.height))
+        pushUnitSquare(ctm, pixelSize(img?.width, img?.height), img ? { inline: img } : undefined)
         break
       }
       case ops.paintImageXObjectRepeat: {
@@ -156,10 +200,23 @@ export function imageRectsFromOps(
         break
       }
       default:
+        if (ops.constructPath !== undefined && fn === ops.constructPath) {
+          // args = [paint op, [path data], minMax] — minMax [x0, y0, x1, y1]
+          // in the current CTM's space, null for an empty path
+          if (args?.[0] === ops.endPath) break
+          const mm = args?.[2] as ArrayLike<number> | null | undefined
+          if (!mm || mm.length < 4) break
+          const [a, b, c, d] = [mm[0]!, mm[1]!, mm[2]!, mm[3]!]
+          if (![a, b, c, d].every(Number.isFinite) || c < a || d < b) break
+          const pts = [applyMatrix(ctm, a, b), applyMatrix(ctm, c, b), applyMatrix(ctm, a, d), applyMatrix(ctm, c, d)]
+          const xs = pts.map((p) => p[0])
+          const ys = pts.map((p) => p[1])
+          paths.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) })
+        }
         break
     }
   }
-  return rects
+  return { images: rects, paths }
 }
 
 /** An image covering at least this share of the page is treated as the page
@@ -186,6 +243,31 @@ export function pageImageRects(page: PDFPageProxy, ops: OpsTable): Promise<UserR
       )
     })().catch(() => [] as UserRect[])
     cache.set(page, promise)
+  }
+  return promise
+}
+
+/** A path covering at least this share of the page is a background (a
+ *  coloured page, a full-page frame), not a figure's stroke */
+const BACKGROUND_SHARE = 0.5
+
+const pathCache = new WeakMap<PDFPageProxy, Promise<UserRect[]>>()
+
+/** The page's painted paths in user space, cached per page proxy like
+ *  pageImageRects. `ops` must carry constructPath and endPath. Failure
+ *  degrades to «no paths». */
+export function pagePathRects(page: PDFPageProxy, ops: OpsTable): Promise<UserRect[]> {
+  let promise = pathCache.get(page)
+  if (!promise) {
+    promise = (async () => {
+      const list = await page.getOperatorList()
+      const [vx0, vy0, vx1, vy1] = page.view
+      const pageArea = Math.abs((vx1 - vx0) * (vy1 - vy0))
+      return pathRectsFromOps(list.fnArray, list.argsArray, ops).filter(
+        (r) => (r.x1 - r.x0) * (r.y1 - r.y0) <= BACKGROUND_SHARE * pageArea
+      )
+    })().catch(() => [] as UserRect[])
+    pathCache.set(page, promise)
   }
   return promise
 }

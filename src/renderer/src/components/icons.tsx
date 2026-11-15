@@ -105,6 +105,26 @@ export const IconFullscreen = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
+/** Hand tool: an open palm, fingers up — the cursor the drag shows. Fingers
+ *  3 wide rather than 4 and a smaller palm: the first drawing filled the box
+ *  edge to edge and read heavy beside the pen (Emil, 2026-10-21); thinner
+ *  still and the fingers run together at 15 px. */
+export const IconHand = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M17.5 11V7a1.5 1.5 0 0 0-3 0v1M14.5 10V5a1.5 1.5 0 0 0-3 0v2M11.5 10.5V6.5a1.5 1.5 0 0 0-3 0v7.5" />
+    <path d="M17.5 9a1.5 1.5 0 1 1 3 0v5a7 7 0 0 1-7 7h-1.5c-2.5 0-4-.8-5.3-2.1l-3.2-3.2a1.6 1.6 0 0 1 2.3-2.3L8.5 15" />
+  </Svg>
+)
+
+/** «Only the pen draws»: a slim stylus writing its line — the tablet apps'
+ *  «stylus only» mark, unlike the pen tool's broad pencil */
+export const IconStylus = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M17.5 2.5l2 2L9 15l-3 1 1-3z" />
+    <path d="M3 21c2-2.5 3.5-2.5 4.5-1s2.5 1.5 4-.5 3-2 4.5-.5 2.5 1 4.5-1" />
+  </Svg>
+)
+
 /** Toolbar pinned: an angled thumbtack, driven in */
 export const IconPin = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
@@ -646,6 +666,14 @@ export const IconView = (p: IconProps): React.JSX.Element => (
 )
 
 /** Split view: one frame divided into two reading columns */
+/** Three documents: one half, two quarters (the mosaic) */
+export const IconMosaic = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <rect x="2.5" y="4" width="19" height="16" rx="2" />
+    <path d="M12 4v16M12 12h9.5" />
+  </Svg>
+)
+
 export const IconSplit = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
     <rect x="2.5" y="4" width="19" height="16" rx="2" />

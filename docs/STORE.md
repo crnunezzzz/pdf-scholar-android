@@ -145,6 +145,19 @@ separate, free enrollment).
      one. No page content on non-PDF sites is read or modified."
    - `file:///*`: "Lets users open local PDF files in the viewer (users must
      additionally enable 'Allow access to file URLs' themselves)."
+   - `nativeMessaging` (optional — asked for only when the user chooses to use
+     their ChatGPT plan through the PDF Scholar desktop app, never at install):
+     "Lets the extension hand an AI question to the locally installed PDF
+     Scholar desktop app, which answers it with the ChatGPT sign-in the user
+     made there. The extension connects only to the app's own registered native
+     host; no sign-in token ever reaches the extension, and nothing is sent to
+     any other program or site." A permission added to the manifest needs its
+     justification in the dashboard BEFORE the next submission: Chrome's publish
+     API refuses the draft with `INVALID_ITEM_METADATA` («does not meet the
+     requirements to be published») until the Privacy practices tab is complete
+     (v0.84.0, 2026-11-09 — the first Chrome submission after `nativeMessaging`
+     came in with v0.82.0), and the uploaded package then waits in the
+     dashboard to be submitted by hand.
    - The install opens ONE tab (the extension's own viewer page, no network
      call) to tell the user about that toggle, and only when the browser reports
      it is off — a store install cannot be asked for it any other way. Never on
@@ -195,7 +208,8 @@ package and submit it, nothing more.
    **Enable** next to "enable the new experience" (that is the v1.1, API-key
    UI), then **Create API credentials**.
 2. Copy the **Client ID** and the **API key**. The key has an **expiry date** —
-   a 401 later means "renew it", not "the script broke".
+   72 days from creation, Microsoft's fixed term — so a 401 later means
+   "renew it", not "the script broke".
 3. Repo secrets: `EDGE_CLIENT_ID`, `EDGE_API_KEY`. The product ID
    (`2d23581d-291e-4953-aaf1-0db8715d42ad`, from **Microsoft Edge → Overview →**
    the extension **→ Extension identity**) is an identifier, not a credential —

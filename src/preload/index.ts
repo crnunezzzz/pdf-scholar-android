@@ -1,8 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AiChatRequest,
+  AiCitation,
   AiCitationTarget,
   AiConfig,
+  AiDeltaKind,
   AiProviderId,
   AnnotateRequest,
   DeleteAnnotationRequest,
@@ -17,6 +19,9 @@ import type {
   SetFormFieldRequest,
   Settings
 } from '../shared/types'
+import type { StoredConversation } from '../shared/chat-history'
+import type { DocNotes } from '../shared/research-notes'
+import type { McpPolicy, McpTarget } from '../shared/mcp'
 
 const api: PdfxApi = {
   openFileDialog: () => ipcRenderer.invoke('dialog:open'),
@@ -40,6 +45,31 @@ const api: PdfxApi = {
   setPosition: (path: string, pos: ReadingPosition) => ipcRenderer.send('position:set', path, pos),
   setBookmarks: (path: string, bookmarks: DocBookmark[]) =>
     ipcRenderer.send('bookmarks:set', path, bookmarks),
+  getConversations: (path: string) => ipcRenderer.invoke('chats:get', path),
+  setConversations: (path: string, name: string, list: StoredConversation[]) =>
+    ipcRenderer.invoke('chats:set', path, name, list),
+  listConversations: () => ipcRenderer.invoke('chats:list'),
+  searchConversations: (query: string) => ipcRenderer.invoke('chats:search', query),
+  docIdentity: (path: string, name: string, fingerprint: string) =>
+    ipcRenderer.invoke('identity:report', path, name, fingerprint),
+  goneDocuments: () => ipcRenderer.invoke('library:gone'),
+  forgetDocuments: (paths: string[]) => ipcRenderer.invoke('library:forget', paths),
+  setDocNotes: (record: DocNotes) => ipcRenderer.invoke('notes:set', record),
+  mcpStatus: () => ipcRenderer.invoke('mcp:status'),
+  mcpConnect: (target: McpTarget, on: boolean) => ipcRenderer.invoke('mcp:connect', target, on),
+  mcpPolicy: () => ipcRenderer.invoke('mcp:policy'),
+  mcpSetPolicy: (patch: Partial<Pick<McpPolicy, 'excludedDocs' | 'excludedFolders'>>) =>
+    ipcRenderer.invoke('mcp:set-policy', patch),
+  mcpPickFolder: () => ipcRenderer.invoke('mcp:pick-folder'),
+  mcpDocuments: () => ipcRenderer.invoke('mcp:documents'),
+  notesBackfillTargets: () => ipcRenderer.invoke('notes:backfill-targets'),
+  onConversationsChanged: (cb: (path: string | null) => void) => {
+    const listener = (_e: unknown, path: string): void => cb(path)
+    ipcRenderer.on('chats:changed', listener)
+    return () => {
+      ipcRenderer.removeListener('chats:changed', listener)
+    }
+  },
   setSettings: (patch: Partial<Settings>) => ipcRenderer.send('settings:set', patch),
   annotate: (req: AnnotateRequest) => ipcRenderer.invoke('annotate', req),
   updateAnnotation: (req: ModifyAnnotationRequest) => ipcRenderer.invoke('annotation:update', req),
@@ -127,6 +157,7 @@ const api: PdfxApi = {
     }
   },
   getVersion: () => ipcRenderer.invoke('app:version'),
+  systemLanguages: () => ipcRenderer.invoke('app:system-languages'),
   onUpdateAvailable: (cb: (version: string) => void) => {
     const listener = (_e: unknown, version: string): void => cb(version)
     ipcRenderer.on('update:available', listener)
@@ -170,9 +201,16 @@ const api: PdfxApi = {
   aiChatgptLogout: () => ipcRenderer.invoke('ai:chatgpt-logout'),
   aiChat: (request: AiChatRequest) => ipcRenderer.invoke('ai:chat', request),
   aiAbort: (requestId: number) => ipcRenderer.send('ai:abort', requestId),
-  onAiDelta: (cb: (requestId: number, text: string, kind?: 'thinking') => void) => {
-    const listener = (_e: unknown, requestId: number, text: string, kind?: 'thinking'): void =>
-      cb(requestId, text, kind)
+  onAiDelta: (
+    cb: (requestId: number, text: string, kind?: AiDeltaKind, citation?: AiCitation) => void
+  ) => {
+    const listener = (
+      _e: unknown,
+      requestId: number,
+      text: string,
+      kind?: AiDeltaKind,
+      citation?: AiCitation
+    ): void => cb(requestId, text, kind, citation)
     ipcRenderer.on('ai:delta', listener)
     return () => {
       ipcRenderer.removeListener('ai:delta', listener)

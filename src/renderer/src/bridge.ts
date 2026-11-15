@@ -12,12 +12,24 @@ import type {
 } from '../../shared/types'
 import { t } from './i18n'
 import { createExtensionApi, isExtensionContext } from './extension-api'
+import { createAndroidApi, isAndroidContext } from './android-api'
 import { requestAssistantJump, subscribeAssistantJumps } from './assistant-channel'
 import { buildAssistantHash } from '../../shared/viewer-url'
 import { version as appVersion } from '../../../package.json'
 import { DEFAULT_SETTINGS } from '../../shared/defaults'
 import { DEFAULT_AI_MODELS } from '../../shared/defaults'
+import type { ConversationDoc } from '../../shared/chat-history'
+import {
+  byNewest,
+  docNameFromPath,
+  sanitizeConversationDoc,
+  sanitizeConversations,
+  searchConversations,
+  summarizeConversations,
+  toMeta
+} from '../../shared/chat-history'
 import { AI_ERRORS, CHATGPT_LOGIN_ERRORS } from '../../shared/engine-errors'
+import { partsAsDeltas } from '../../shared/ai-stream'
 import { createDoiClient, httpDoiFetch } from '../../shared/doi'
 import { createAbstractClient } from '../../shared/abstract'
 import { attachmentMime, cleanAttachmentName } from '../../shared/attachments'
@@ -35,6 +47,19 @@ export const isElectron = typeof window !== 'undefined' && !!window.api
  *  the plain-web dev fallback, the extension can write back to local files via
  *  a retained File System Access handle, so it supports in-place save. */
 export const isExtension = !isElectron && isExtensionContext()
+
+/** True in the Android app (Capacitor WebView, see android-api.ts and
+ *  docs/ANDROID.md). Like the desktop it keeps its own tab strip and writes
+ *  back to the documents it opened. */
+export const isAndroid = !isElectron && !isExtension && isAndroidContext()
+
+/** The app owns its tabs (desktop, Android) rather than the browser: the strip
+ *  is remembered across launches and another document can join a split */
+export const hasAppTabs = isElectron || isAndroid
+
+/** A save goes back over the document that was opened (desktop in place, the
+ *  extension through its file handle, Android through the picker's grant) */
+export const writesInPlace = isElectron || isExtension || isAndroid
 
 interface WebState {
   positions: Record<string, ReadingPosition>
@@ -61,6 +86,23 @@ function loadWebState(): WebState {
 
 function saveWebState(state: WebState): void {
   localStorage.setItem(LS_KEY, JSON.stringify(state))
+}
+
+const WEB_CHATS_KEY = 'pdfx-web-chats'
+
+function loadWebChats(): Record<string, ConversationDoc> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(WEB_CHATS_KEY) ?? '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, ConversationDoc> = {}
+    for (const [path, raw] of Object.entries(parsed)) {
+      const doc = sanitizeConversationDoc(raw)
+      if (doc && doc.path === path) out[path] = doc
+    }
+    return out
+  } catch {
+    return {}
+  }
 }
 
 /** One DOI client for the page — the success cache lives as long as it does */
@@ -121,6 +163,65 @@ export const webApi: PdfxApi = {
     if (bookmarks.length === 0) delete state.bookmarks[path]
     else state.bookmarks[path] = bookmarks
     saveWebState(state)
+  },
+  // The AI conversations (issue #46): localStorage here, the same contract as
+  // desktop's files and the extension's IndexedDB. A quota hit loses the
+  // write, which is what a browser preview costs — the panel keeps its copy.
+  getConversations: async (path) => loadWebChats()[path]?.conversations ?? [],
+  setConversations: async (path, name, list) => {
+    const all = loadWebChats()
+    const clean = sanitizeConversations(list)
+    if (clean.length === 0) delete all[path]
+    else all[path] = { path, name: name.trim() || docNameFromPath(path), conversations: clean }
+    try {
+      localStorage.setItem(WEB_CHATS_KEY, JSON.stringify(all))
+    } catch {
+      /* quota: the panel keeps its copy until the next write */
+    }
+  },
+  listConversations: async () => byNewest(Object.values(loadWebChats()).flatMap(summarizeConversations)).map(toMeta),
+  searchConversations: async (query) =>
+    searchConversations(Object.values(loadWebChats()).flatMap(summarizeConversations), query),
+  // A browser preview cannot tell whether a fetched path is gone, and a
+  // record is only ever moved away from a path known to be gone — so no
+  // rebinding here (shared/doc-identity.ts; desktop and the extension do it)
+  docIdentity: async () => [],
+  // Nothing here can be known gone (see docIdentity above)…
+  goneDocuments: async () => [],
+  // …but forgetting is plain bookkeeping, the same as everywhere
+  forgetDocuments: async (paths) => {
+    const chats = loadWebChats()
+    const state = loadWebState()
+    for (const p of paths) {
+      delete chats[p]
+      delete state.positions[p]
+      if (state.bookmarks) delete state.bookmarks[p]
+    }
+    try {
+      localStorage.setItem(WEB_CHATS_KEY, JSON.stringify(chats))
+    } catch {
+      /* quota: nothing was added, so this cannot really happen */
+    }
+    saveWebState(state)
+  },
+  // No other program can start anything a browser tab holds: nothing to keep
+  // for one, nothing to connect
+  setDocNotes: async () => {},
+  mcpStatus: async () => null,
+  mcpConnect: async () => ({ ok: false, code: 'mcp-unsupported', error: 'web' }),
+  mcpPolicy: async () => null,
+  mcpSetPolicy: async () => null,
+  mcpPickFolder: async () => null,
+  mcpDocuments: async () => [],
+  notesBackfillTargets: async () => [],
+  // `storage` fires in OTHER tabs only, and names no document — the listener
+  // refreshes whatever it shows
+  onConversationsChanged: (cb) => {
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key === WEB_CHATS_KEY) cb(null)
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   },
   setSettings: (patch) => {
     const state = loadWebState()
@@ -244,6 +345,10 @@ export const webApi: PdfxApi = {
   getPathForFile: () => null,
   onOpenPath: () => () => {},
   getVersion: async () => appVersion,
+  // The browser's language list — in the extension the one the reader set in
+  // Edge/Chrome, which is as close to the system's as a page can get
+  systemLanguages: async () =>
+    navigator.languages?.length ? [...navigator.languages] : [navigator.language || 'en'],
   // Auto-update is a desktop concern — the browser/extension just no-ops
   onUpdateAvailable: () => () => {},
   onUpdateProgress: () => () => {},
@@ -269,7 +374,7 @@ export const webApi: PdfxApi = {
     keyStorage: 'session-only' as const,
     keysSupported: false,
     catalog: {},
-    chatgpt: { supported: false, account: '' }
+    chatgpt: { supported: false, account: '', borrowed: false }
   }),
   aiSetConfig: async (patch) => {
     const current = loadWebAiConfig()
@@ -288,7 +393,7 @@ export const webApi: PdfxApi = {
       keyStorage: 'session-only' as const,
       keysSupported: false,
       catalog: {},
-      chatgpt: { supported: false, account: '' }
+      chatgpt: { supported: false, account: '', borrowed: false }
     }
   },
   // No keys in the preview → nothing to fetch; hand back the current view
@@ -320,17 +425,6 @@ export const webApi: PdfxApi = {
       request.webSearch === 'on' || (request.webSearch === 'ask' && askedForWeb)
     const answerC = searching ? ' Et nettsøk bekrefter dette i en ekstern kilde.' : ''
     const full = answerA + answerB + answerC
-    // Few large chunks: background-tab timer clamping (≥1s) would make
-    // word-by-word streaming crawl in the automated preview
-    const step = Math.ceil(full.length / 5)
-    for (let i = 0; i < full.length; i += step) {
-      if (webAiAborted.has(request.requestId)) {
-        webAiAborted.delete(request.requestId)
-        return { error: t('ai.aborted') }
-      }
-      for (const cb of webAiDeltaListeners) cb(request.requestId, full.slice(i, i + step))
-      await new Promise((resolve) => setTimeout(resolve, 30))
-    }
     const mid = doc ? Math.floor(doc.text.length * 0.4) : 0
     const parts: AiContentPart[] = doc
       ? [
@@ -358,6 +452,20 @@ export const webApi: PdfxApi = {
         text: answerC,
         citations: [{ kind: 'web', url: 'https://example.org/kilde', title: 'Eksempelkilde (mock)' }]
       })
+    }
+    // Few large chunks: background-tab timer clamping (≥1s) would make
+    // word-by-word streaming crawl in the automated preview. Each part streams
+    // as a native block (block, citations, text), like the real provider.
+    const step = Math.ceil(full.length / 5)
+    const chunks = (text: string): string[] =>
+      Array.from({ length: Math.ceil(text.length / step) }, (_, i) => text.slice(i * step, (i + 1) * step))
+    for (const delta of partsAsDeltas(parts, chunks)) {
+      if (webAiAborted.has(request.requestId)) {
+        webAiAborted.delete(request.requestId)
+        return { error: t('ai.aborted') }
+      }
+      for (const cb of webAiDeltaListeners) cb(request.requestId, delta.text, delta.kind, delta.citation)
+      if (!delta.kind) await new Promise((resolve) => setTimeout(resolve, 30))
     }
     return {
       ok: true,
@@ -451,7 +559,7 @@ export function downloadAttachment(rawName: string, data: Uint8Array): { path: s
   return { path: name }
 }
 
-const webAiDeltaListeners = new Set<(requestId: number, text: string, kind?: 'thinking') => void>()
+const webAiDeltaListeners = new Set<Parameters<PdfxApi['onAiDelta']>[0]>()
 const webAiAborted = new Set<number>()
 
 function loadWebAiConfig(): AiConfig {
@@ -483,4 +591,6 @@ export const bridge: PdfxApi = window.api
   ? window.api
   : isExtensionContext()
     ? createExtensionApi(webApi)
-    : webApi
+    : isAndroidContext()
+      ? createAndroidApi(webApi)
+      : webApi

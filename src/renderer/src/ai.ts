@@ -1,13 +1,22 @@
 // Renderer-side AI helpers: document text assembly for the API, mapping
 // citations back to page positions, and token accounting.
-import type { AiCitation, AiModelCatalog, AiProviderId, AiUsage } from '../../shared/types'
-import { getLanguage } from './i18n'
+import type {
+  AiCitation,
+  AiContentPart,
+  AiModelCatalog,
+  AiProviderId,
+  AiUsage
+} from '../../shared/types'
+import { streamingParts } from '../../shared/ai-stream'
+import { getLanguage, getLanguagePreference, getSystemLanguages } from './i18n'
+import { defaultAnswerLanguage } from '../../shared/answer-language'
 import type { PageText } from './search'
 import type { AiDocument, Bm25Index, DocBlock } from './ai-retrieval'
 import {
   buildBlocks,
   buildBm25Index,
   buildExcerptDocument,
+  charCitationsToQuotes,
   documentFits,
   excerptCharBudget,
   selectExcerptBlocks,
@@ -32,6 +41,23 @@ export const nextAiRequestId = (): number => aiRequestCounter++
  *  took 37 seconds to say anything at all under load (live run, 2026-08-18).
  *  Shared so the panel and the quick popover cannot drift apart on it. */
 export const WAIT_HINT_S = 10
+
+/** How a request in flight cites: through [KILDE …] markers in its text
+ *  (`contract`), and into which excerpt its char offsets point (null = the
+ *  whole document, which a chip resolves against on click as usual) */
+export interface StreamCiting {
+  contract: boolean
+  excerptDoc: AiDocument | null
+}
+
+/** What a streaming answer shows right now: the parts with the chips that have
+ *  arrived (shared/ai-stream.ts), char citations resolved against the excerpt
+ *  the request attached — the same resolution the settled answer gets, so the
+ *  chips do not change page when it lands. */
+export function streamedAnswer(parts: AiContentPart[], citing: StreamCiting): AiContentPart[] {
+  const shown = streamingParts(parts, citing.contract)
+  return citing.excerptDoc ? charCitationsToQuotes(shown, citing.excerptDoc) : shown
+}
 
 /** Page markers let prompt-contract providers (OpenAI/Azure) name page
  *  numbers; Anthropic citations use raw char offsets which we map ourselves.
@@ -76,14 +102,17 @@ export function prepareDocumentForRequest(
   provider: AiProviderId,
   modelId: string,
   queryText: string,
-  catalog?: AiModelCatalog
+  catalog?: AiModelCatalog,
+  /** Characters something else in the request takes — the attached earlier
+   *  conversations (shared/conversation-context.ts) — off the document's room */
+  reserveChars = 0
 ): PreparedDocument {
   const contextTokens = contextTokensFor(provider, modelId, catalog)
   // Two ceilings, and the account's quota is usually the binding one (see
   // ai-token-limits.ts). Unknown until a request has reported it, which is
   // the everyday case and leaves the arithmetic exactly as it was.
   const limitTokens = requestTokenLimit(provider, modelId)
-  if (documentFits(ensured.doc.text.length, contextTokens, limitTokens)) {
+  if (documentFits(ensured.doc.text.length + reserveChars, contextTokens, limitTokens)) {
     return { doc: ensured.doc, excerpt: null }
   }
   const texts = ensured.pages.map((p) => p.text)
@@ -96,7 +125,7 @@ export function prepareDocumentForRequest(
   const selected = selectExcerptBlocks(
     index.blocks,
     queryText,
-    excerptCharBudget(contextTokens, limitTokens),
+    Math.max(4_000, excerptCharBudget(contextTokens, limitTokens) - reserveChars),
     index.bm25
   )
   // The chip counts PAGES, not blocks: «14 of 600 pages» is what the reader
@@ -144,8 +173,9 @@ export function resolveCitation(
   pages: PageText[],
   doc: AiDocument
 ): ResolvedCitation | null {
-  // Web citations point outside the document — opened externally, never resolved
-  if (citation.kind === 'web') return null
+  // Web citations point outside the document — opened externally, never resolved;
+  // a conversation chip points at another conversation, not into this text
+  if (citation.kind === 'web' || citation.kind === 'conversation') return null
   if (citation.kind === 'quote') {
     const pageIndex = citation.pageNumber - 1
     if (pageIndex < 0 || pageIndex >= pages.length) return null
@@ -317,7 +347,7 @@ function normalizeWithMap(text: string): { norm: string; map: number[] } {
 
 /** Page number a citation points at (for chip labels), best effort */
 export function citationPage(citation: AiCitation, doc: AiDocument | null): number | null {
-  if (citation.kind === 'web') return null
+  if (citation.kind === 'web' || citation.kind === 'conversation') return null
   if (citation.kind === 'quote') return citation.pageNumber
   if (!doc || doc.pageStarts.length === 0) return null
   const slot = slotAtOffset(doc.pageStarts, citation.start)
@@ -346,23 +376,98 @@ export function formatTokens(usage: AiUsage): string {
 // ---------- Prompts (follow the app language) ----------
 //
 // Norwegian has its own prompts; the English ones serve every other interface
-// language. They say «answer in the language the user writes in», which a chip
-// cannot satisfy — «Forklar» sends no words of the reader's — so a Chinese
-// interface names its language: in the prompts that say «in English», that
-// phrase becomes the reader's language, and the open-ended ones get one line
-// appended. The user-message scaffolds stay English: the model reads them,
+// language. The user-message scaffolds stay English: the model reads them,
 // the reader does not.
+//
+// WHICH LANGUAGE THE ANSWER IS IN (issue #75: a Spanish student asked in
+// Spanish and got English). One rule, in two halves:
+// - Where the reader typed something — a chat message, a «Spør …» question —
+//   the language of THEIR words decides, whatever the interface, the document
+//   or these prompts are written in. A Spanish question gets Spanish in an
+//   English interface; an English question gets English in a Norwegian one.
+// - Where they typed nothing — the chips, the passage search (a search term
+//   is vocabulary, usually the document's own, not a choice of language), the
+//   structured summary unless the conversation already holds messages of the
+//   reader's own — the answer takes the default: defaultAnswerLanguage() in
+//   shared/answer-language.ts, the interface language, or the system's when
+//   the interface is English only for want of a dictionary.
+// The rule travels as the request's `languageRule`, which every provider path
+// puts LAST in the system prompt — after the document hand-off and the quote
+// contract — because the last rule is the one a weaker model keeps. It is
+// written in English or Norwegian like the rest, and names the target
+// language outright, so the model answers in it even though the instruction
+// itself is not.
 
-/** The language the fixed-task prompts ask for */
+/** The language an answer takes when nothing the reader typed decides it,
+ *  named in English («Spanish», «Simplified Chinese») */
 function answerLanguage(): string {
-  return getLanguage() === 'zh' ? 'Simplified Chinese' : 'English'
+  return defaultAnswerLanguage(getLanguage(), getLanguagePreference(), getSystemLanguages())
 }
 
-/** Appended to the open-ended English prompts (chat, ask, summary, search) */
-function uiLanguageNote(): string {
-  return getLanguage() === 'zh'
-    ? '\n\nThe reader uses the app in Simplified Chinese: answer in Simplified Chinese unless they write to you in another language.'
-    : ''
+/** The rule where the reader's own words decide: the chat panel (and the
+ *  passage search, which must send the chat's exact system prompt so the
+ *  Anthropic prompt cache is shared). The app's own fixed requests in the
+ *  chat — the summary, the search — name their language in the message. */
+export function chatLanguageRule(): string {
+  if (getLanguage() === 'nb') {
+    return `
+
+SVARSPRÅK (denne regelen går foran alt annet om språk)
+- Svar på språket brukeren skriver sin siste melding på. Avgjør det ut fra brukerens egne ord – ikke ut fra dokumentet, sitatene eller disse instruksjonene. Et spørsmål på engelsk får svar på engelsk, et spørsmål på spansk svar på spansk, et spørsmål på norsk svar på norsk, uansett hvilket språk dokumentet er skrevet på.
+- Noen meldinger er faste forespørsler appen skriver for brukeren (et strukturert sammendrag, et søk etter steder i dokumentet). De sier selv hvilket språk svaret skal ha – følg det.
+- Har meldingen for få ord til at språket kan avgjøres (et navn, en formel, et innlimt sitat), svar på norsk bokmål.
+- Sitater fra dokumentet gjengis ordrett på dokumentets eget språk; bare dine egne ord følger denne regelen.`
+  }
+  const fallback = answerLanguage()
+  return `
+
+ANSWER LANGUAGE (this rule overrides everything else about language)
+- Answer in the language the user writes their latest message in. Judge it from the user's own words — not from the document, the quoted excerpts or these instructions. A question in Spanish gets an answer in Spanish, a question in Norwegian an answer in Norwegian, a question in English an answer in English, whatever language the document is written in.
+- Some messages are fixed requests the app writes on the user's behalf (a structured summary, a search for passages). They say which language to answer in — follow that.
+- If the message has too few words to tell its language (a name, a formula, a pasted quote), answer in ${fallback}.
+- Quotes from the document stay verbatim in the document's own language; only your own words follow this rule.`
+}
+
+/** The rule for a typed question about the selection («Spør …»): the
+ *  question's language decides — never the selection's or the document's */
+function askLanguageRule(): string {
+  if (getLanguage() === 'nb') {
+    return `
+
+SVARSPRÅK (denne regelen går foran alt annet om språk)
+- Svar på språket spørsmålet er skrevet på. Avgjør det ut fra spørsmålet alene – ikke ut fra den markerte teksten, dokumentet eller disse instruksjonene. Et spørsmål på engelsk får svar på engelsk, et spørsmål på spansk svar på spansk, uansett hvilket språk dokumentet er skrevet på.
+- Har spørsmålet for få ord til at språket kan avgjøres, svar på norsk bokmål.
+- Sitater fra dokumentet gjengis ordrett på dokumentets eget språk.`
+  }
+  return `
+
+ANSWER LANGUAGE (this rule overrides everything else about language)
+- Answer in the language the user's question is written in. Judge it from the question alone — not from the selected text, the document or these instructions. A question in Spanish gets an answer in Spanish, a question in Norwegian an answer in Norwegian, whatever language the document is written in.
+- If the question has too few words to tell its language, answer in ${answerLanguage()}.
+- Quotes from the document stay verbatim in the document's own language.`
+}
+
+/** The rule for a one-click action: the reader typed nothing, so the default
+ *  language is the answer's, whatever the document and the selection are in */
+function fixedLanguageRule(): string {
+  if (getLanguage() === 'nb') {
+    return `
+
+SVARSPRÅK
+- Skriv hele svaret på norsk bokmål, også når dokumentet og den markerte teksten er på et annet språk.
+- Sitater fra dokumentet gjengis ordrett på dokumentets eget språk.`
+  }
+  return `
+
+ANSWER LANGUAGE
+- Write your whole answer in ${answerLanguage()}, even when the document, the selected text and these instructions are in another language.
+- Quotes from the document stay verbatim in the document's own language.`
+}
+
+/** The answer-language rule for a selection-bubble request (AiQuickPopover):
+ *  the typed question decides for «Spør …», the default for every chip */
+export function quickLanguageRule(mode: string): string {
+  return mode === 'ask' ? askLanguageRule() : fixedLanguageRule()
 }
 
 export function chatSystem(): string {
@@ -373,7 +478,6 @@ STIL
 - Svar kort som standard: 2–6 setninger. Bruk lister, overskrifter eller lengre format bare når brukeren ber om dybde, struktur eller sammendrag.
 - Akademisk nøkternt: ingen småprat, ikke gjenta spørsmålet, ingen avsluttende tilbud om mer hjelp.
 - Panelet er smalt — foretrekk kompakt prosa fremfor brede tabeller.
-- Svar på språket brukeren skriver på.
 
 KILDEFORANKRING
 - Bygg svarene på dokumentet og siter passasjen for hvert vesentlige poeng, slik at brukeren kan hoppe dit i PDF-en.
@@ -386,12 +490,11 @@ STYLE
 - Default to short answers: 2–6 sentences. Use lists, headings or longer form only when the user asks for depth, structure or a summary.
 - Academically sober: no small talk, do not restate the question, no closing offers of further help.
 - The panel is narrow — prefer compact prose over wide tables.
-- Answer in the language the user writes in.
 
 GROUNDING
 - Base answers on the document and cite the passage for every substantive point, so the user can jump there in the PDF.
 - Explicitly separate what the document says from your own assessment or background knowledge (e.g. "The paper reports … Beyond the document: …").
-- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.${uiLanguageNote()}`
+- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.`
 }
 
 /**
@@ -441,17 +544,17 @@ export function askSystem(): string {
   if (getLanguage() === 'nb') {
     return `Du er forskningsassistenten i PDF-leseren PDF Scholar. Brukeren har markert en passasje i et dokument de leser og stiller et eget spørsmål om den. Hele dokumentteksten er vedlagt med sidemarkører.
 
-- Svar kort (2–6 setninger), uten innledning eller oppsummering, på språket spørsmålet er stilt på.
+- Svar kort (2–6 setninger), uten innledning eller oppsummering.
 - Bygg svaret på dokumentet og siter passasjen for hvert vesentlige poeng, slik at brukeren kan hoppe dit i PDF-en.
 - Skill eksplisitt mellom hva dokumentet sier og din egen vurdering eller bakgrunnskunnskap.
 - Hvis dokumentet ikke besvarer spørsmålet, si det rett ut i stedet for å gjette. Finn aldri på sitater, tall eller referanser.`
   }
   return `You are the research assistant in the PDF reader PDF Scholar. The user has selected a passage in a document they are reading and asks their own question about it. The full document text is attached with page markers.
 
-- Answer briefly (2–6 sentences), with no preamble or summary, in the language the question is asked in.
+- Answer briefly (2–6 sentences), with no preamble or summary.
 - Base the answer on the document and cite the passage for every substantive point, so the user can jump there in the PDF.
 - Explicitly separate what the document says from your own assessment or background knowledge.
-- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.${uiLanguageNote()}`
+- If the document does not answer the question, say so plainly instead of guessing. Never invent quotes, numbers or references.`
 }
 
 /** Methodological critique of the selected claim/passage. The whole document
@@ -568,11 +671,15 @@ export function semanticSearchPrompt(query: string): string {
   if (getLanguage() === 'nb') {
     return `Finn de 3–8 stedene i dokumentet som best omtaler dette temaet: «${query}»
 
-Svar KUN med en nummerert liste, uten innledning eller avslutning. Hvert punkt: én kort beskrivelse (maks 15 ord) av hva stedet sier, med et kort ordrett sitat (10–30 ord) fra passasjen som kilde. Ranger etter relevans. Hvis dokumentet ikke omtaler temaet, si det i én setning uten liste.`
+Svar KUN med en nummerert liste, uten innledning eller avslutning. Hvert punkt: én kort beskrivelse (maks 15 ord) av hva stedet sier, med et kort ordrett sitat (10–30 ord) fra passasjen som kilde. Ranger etter relevans. Hvis dokumentet ikke omtaler temaet, si det i én setning uten liste.
+
+Skriv beskrivelsene på norsk bokmål, uansett hvilket språk temaet og dokumentet er på; sitatene står ordrett.`
   }
   return `Find the 3–8 passages in the document that best discuss this topic: "${query}"
 
-Answer ONLY with a numbered list, no preamble or closing. Each item: one short description (max 15 words) of what the passage says, citing a short verbatim quote (10–30 words) from the passage as the source. Rank by relevance. If the document does not discuss the topic, say so in one sentence with no list.${uiLanguageNote()}`
+Answer ONLY with a numbered list, no preamble or closing. Each item: one short description (max 15 words) of what the passage says, citing a short verbatim quote (10–30 words) from the passage as the source. Rank by relevance. If the document does not discuss the topic, say so in one sentence with no list.
+
+Write the descriptions in ${answerLanguage()}, whatever language the topic and the document are in; the quotes stay verbatim.`
 }
 
 /** User-message scaffold for reference lookup */
@@ -620,7 +727,9 @@ export function summaryPrompt(): string {
 #### Bidrag
 #### Begrensninger
 
-Hold hver del til 1–4 setninger og siter kilden for hvert vesentlige punkt. Hvis dokumentet ikke er en empirisk forskningsartikkel, tilpass delene til dokumenttypen (f.eks. Problemstilling/Tilnærming/Konklusjoner for en rapport) og si kort fra om det.`
+Hold hver del til 1–4 setninger og siter kilden for hvert vesentlige punkt. Hvis dokumentet ikke er en empirisk forskningsartikkel, tilpass delene til dokumenttypen (f.eks. Problemstilling/Tilnærming/Konklusjoner for en rapport) og si kort fra om det.
+
+Språk: har brukeren skrevet egne meldinger tidligere i denne samtalen, skriv hele sammendraget på språket de er skrevet på; ellers på norsk bokmål. Det gjelder overskriftene også, uansett hvilket språk dokumentet er på; sitatene står ordrett.`
   }
   return `Write a structured summary of the document using these sections as headings (#### Heading):
 
@@ -631,5 +740,7 @@ Hold hver del til 1–4 setninger og siter kilden for hvert vesentlige punkt. Hv
 #### Contribution
 #### Limitations
 
-Keep each section to 1–4 sentences and cite the source for every substantive point. If the document is not an empirical research article, adapt the sections to the document type (e.g. Problem/Approach/Conclusions for a report) and briefly say so.${uiLanguageNote()}`
+Keep each section to 1–4 sentences and cite the source for every substantive point. If the document is not an empirical research article, adapt the sections to the document type (e.g. Problem/Approach/Conclusions for a report) and briefly say so.
+
+Language: if the user has written messages of their own earlier in this conversation, write the whole summary in the language they wrote them in; otherwise write it in ${answerLanguage()}. That goes for the section headings too, whatever language the document is in; the quotes stay verbatim.`
 }

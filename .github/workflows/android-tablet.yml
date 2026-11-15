@@ -1,0 +1,57 @@
+# The Android app on a tablet: the debug APK installed on an emulated Pixel
+# Tablet and driven end to end by scripts/test-android-device.mjs (three
+# different PDFs as tabs from «Open with», the two-document split, fullscreen
+# and Back, a pen stroke saved in place, turning the device, the
+# three-document mosaic and a finger drag onto it, a cold restart). Pull requests and by hand
+# only — an emulator costs minutes, a push already builds the APK
+# (android.yml). Screenshots of every state are attached to the run.
+name: Android tablet
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tablet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run android:sync
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+      # Hardware acceleration for the emulator on the hosted runner
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run on an emulated tablet
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_tablet
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: node scripts/test-android-device.mjs android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-tablet-screenshots
+          path: android-shots/
+          if-no-files-found: ignore

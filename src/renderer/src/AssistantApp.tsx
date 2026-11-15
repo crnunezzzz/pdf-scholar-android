@@ -20,10 +20,12 @@ import type { AiImage, FilePayload, Settings, ThemeName } from '../../shared/typ
 import { bridge, isExtension } from './bridge'
 import { errorText, setLanguage, t, useLang } from './i18n'
 import { applyPageTune, tuneTitleBar } from './theme-tune'
+import { applyReadingFont, loadReadingFont } from './reading-font'
 import { openDocument, isPasswordException } from './pdf-doc'
 import type { DocResources } from './pdf-doc'
 import { renderPagesAsImages } from './ai-page-images'
 import { buildPageTexts, hasExtractableText } from './search'
+import { allowOcrStore, enableOcr, setOcrAuto, useOcrAllowed, useOcrOffer, useOcrProgress } from './ocr'
 import type { PageText } from './search'
 import { buildAiDocument } from './ai'
 import type { ResolvedCitation } from './ai'
@@ -63,6 +65,8 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
   /** The last citation click found no window showing the document */
   const [jumpFailed, setJumpFailed] = useState(false)
   const docResourcesRef = useRef<DocResources | null>(null)
+  /** The document was opened with a password (see load) */
+  const lockedRef = useRef(false)
   const pageTextsRef = useRef<PageText[] | null>(null)
 
   // ---------- Theme + language (mirrors ExtensionApp/App) ----------
@@ -84,6 +88,11 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
 
   // Theme + tone override — mirrors App.tsx (no page is mounted here, but the
   // variables must never disagree between the two windows of one app).
+  // The reading font, once at start (the detached window reads the store the
+  // viewer window's menu wrote; it has no field of its own)
+  useEffect(() => {
+    applyReadingFont(loadReadingFont())
+  }, [])
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme
     applyPageTune(resolvedTheme, settings.themeTune, settings.customTone, settings.nightTone)
@@ -101,6 +110,8 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
   useEffect(() => {
     setLanguage(settings.language)
   }, [settings.language])
+
+  useEffect(() => setOcrAuto(settings.ocrAuto), [settings.ocrAuto])
 
   // ---------- The document (text only — no page is ever mounted) ----------
 
@@ -122,6 +133,10 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
         const doc = await resources.task.promise
         docResourcesRef.current = resources
         pageTextsRef.current = null
+        // Opened WITH a password: its conversations are stored without images
+        lockedRef.current = password !== undefined
+        // OCR kept between sessions — never a locked document's (ocr-store.ts)
+        if (password === undefined) allowOcrStore(doc)
         setPasswordAsk(null)
         setPdf(doc)
       } catch (err) {
@@ -141,6 +156,26 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
     bridge.getSettings().then(setSettingsState)
     void load()
   }, [load])
+
+  // This window reads a scanned document's pages itself — it has its own
+  // pdf.js document, and the viewer's OCR lives in the viewer's window
+  // The scanned pages alone: the assistant never waits for figures
+  const ocrProgress = useOcrProgress(pdf, true)
+  const ocrOffer = useOcrOffer(pdf)
+  const ocrAllowed = useOcrAllowed(pdf)
+  // OCR allowed mid-session: the texts read without it go, the panel reads again
+  const [ocrEpoch, setOcrEpoch] = useState(0)
+  const ocrAllowedRef = useRef(ocrAllowed)
+  useEffect(() => {
+    if (ocrAllowed && !ocrAllowedRef.current) {
+      pageTextsRef.current = null
+      setOcrEpoch((n) => n + 1)
+    }
+    ocrAllowedRef.current = ocrAllowed
+  }, [ocrAllowed])
+  const onEnableOcr = useCallback(() => {
+    if (pdf) enableOcr(pdf)
+  }, [pdf])
 
   const ensureDocument = useCallback(async (): Promise<EnsuredDocument | null> => {
     if (!pdf) return null
@@ -199,6 +234,10 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
           seed={null}
           onSeedConsumed={noop}
           ensureDocument={ensureDocument}
+          ocrProgress={ocrProgress}
+          ocrOffer={ocrOffer}
+          onEnableOcr={onEnableOcr}
+          docEpoch={ocrEpoch}
           hasAnnotations={false}
           annotsAskId={0}
           getAnnotationsText={async () => null}
@@ -213,6 +252,10 @@ export default function AssistantApp({ docPath }: { docPath: string }): React.JS
           pagesBusy={pagesBusy}
           currentPage={1}
           pageCount={pdf?.numPages ?? 1}
+          // No tab strip here: another document's conversation opens that
+          // document in a viewer window (or tab), which picks the handoff up
+          onOpenElsewhere={(path) => bridge.newWindow(path)}
+          isLocked={() => lockedRef.current}
         />
       )}
 

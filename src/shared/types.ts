@@ -1,7 +1,10 @@
 // Types shared between the Electron main process, preload bridge and renderer.
 import type { PdfStandardFont } from '@embedpdf/models'
 import type { CitationStyleId } from './citation-style'
+import type { ConversationHit, ConversationMeta, StoredConversation } from './chat-history'
 import type { FileIconChoice, FileIconErrorCode, FileIconResult } from './file-icon'
+import type { DocNotes } from './research-notes'
+import type { McpDocument, McpErrorCode, McpPolicy, McpResult, McpStatus, McpTarget } from './mcp'
 
 /** 'night' is the softer dark mode; 'nightHc' is the high-contrast one;
  *  'custom' is the user-toned light mode (paper tone from `customTone`) */
@@ -9,20 +12,26 @@ export type ThemeName = 'day' | 'sepia' | 'night' | 'nightHc' | 'custom'
 /** User's theme choice — 'auto' follows the OS light/dark setting */
 export type ThemePreference = ThemeName | 'auto'
 
-/** Paper tone of the 'custom' («Farge») theme — a curated set, not a free
- *  colour picker, so every choice is readable by construction (the actual
- *  colours and the readability clamp live in the renderer's theme-tune.ts).
+/** A curated paper tone of the 'custom' («Farge») theme (the actual colours
+ *  and the readability clamp live in the renderer's theme-tune.ts).
  *  'sepia' is the classic cream and the default: the old standalone Sepia
  *  button folded into this picker (Emil, 2026-09-02) — the ThemeName 'sepia'
  *  still exists for stored settings and the auto-mode light choice. */
 export type CustomTone = 'sepia' | 'gray' | 'green' | 'blue' | 'sand'
 
+/** A tint the reader picked, `#rrggbb` — theme-tune.ts holds it to the same
+ *  readability bounds as the curated tones, whatever the file says */
+export type ToneHex = `#${string}`
+/** What the 'custom' theme's paper is: a curated tone or a picked tint */
+export type CustomToneChoice = CustomTone | ToneHex
+
 /** Dark paper tone of the night theme — 'warm' is the shipped near-black,
- *  the others tint the inverted page (curated in theme-tune.ts, same
- *  no-free-colour-input rule as CustomTone). 'paper' is the odd one out: the
+ *  the others tint the inverted page (curated in theme-tune.ts). 'paper' is the odd one out: the
  *  page is NOT inverted at all — white paper as printed under the dark chrome,
  *  the way Edge's dark mode shows a PDF (reader ask, 2026-10-04). */
 export type NightTone = 'warm' | 'gray' | 'blue' | 'green' | 'paper'
+/** What night mode's paper is: a curated tone or a picked tint */
+export type NightToneChoice = NightTone | ToneHex
 
 /** Per-theme intensity relative to the shipped look, 1 = exactly as shipped.
  *  Only the themes with an axis worth dialling are here: sepia (paper warmth),
@@ -46,9 +55,13 @@ export interface Settings {
   /** Intensity per tunable theme, 1 = the shipped look (see ThemeTune) */
   themeTune: ThemeTune
   /** Paper tone the 'custom' («Farge») theme uses */
-  customTone: CustomTone
+  customTone: CustomToneChoice
+  /** Remembered tints for the light tone row, newest first */
+  customTints: string[]
   /** Dark paper tone of the night theme ('warm' = the shipped look) */
-  nightTone: NightTone
+  nightTone: NightToneChoice
+  /** Remembered tints for the night tone row, newest first */
+  nightTints: string[]
   /** Night/Night+: keep raster images in their original colours (an unfiltered
    *  overlay over the picture regions) instead of inverting them with the page */
   nightKeepImages: boolean
@@ -124,6 +137,12 @@ export interface Settings {
   /** How long the pointer rests before the window opens — three fixed
    *  choices (renderer's link-preview.ts holds the milliseconds) */
   linkPreviewDelay: 'short' | 'medium' | 'long'
+  /** Text for scanned pages (OCR, read on this machine): read a page with no
+   *  text of its own as soon as it is met, or only once the reader asks for
+   *  the document («Gjenkjenn tekst» — renderer's ocr.ts). Off spares the
+   *  processor on a machine that would rather not; a document read before is
+   *  remembered either way. */
+  ocrAuto: boolean
 }
 
 export type RecentsGridSize = 'small' | 'medium' | 'large'
@@ -136,6 +155,25 @@ export interface SessionTab {
   /** Pinned tabs stay at the strip's start, lose their close button, and
    *  come back at every launch even with restoreSession off */
   pinned?: boolean
+  /** The document's display name, where the path cannot give one (Android's
+   *  `content://` URIs) — what a restored tab shows before its file is read */
+  name?: string
+  /** The id of the tab group it belongs to (src/shared/tab-groups.ts) */
+  group?: string
+}
+
+/** The colours a tab group can carry — a fixed set, as in the browsers */
+export type TabGroupColor = 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'grey'
+
+/** A named, coloured run of tabs in the strip that folds away to one chip
+ *  (src/shared/tab-groups.ts) */
+export interface TabGroup {
+  id: string
+  /** '' = unnamed: the chip shows its colour alone */
+  name: string
+  color: TabGroupColor
+  /** Folded: the strip shows the chip, not the tabs */
+  collapsed: boolean
 }
 
 /** A window's tabs in strip order (pinned first) and which one was showing */
@@ -143,6 +181,8 @@ export interface SessionWindow {
   tabs: SessionTab[]
   /** Index into `tabs` of the tab that was showing */
   active: number
+  /** The groups `tabs` refer to; absent when there are none */
+  groups?: TabGroup[]
 }
 
 export interface RecentFile {
@@ -174,6 +214,16 @@ export interface RecentThumb {
 }
 
 /** A RecentThumb as the library reads it: with where the reader is */
+/** A document whose file is gone, and what the app still keeps for it
+ *  (PdfxApi.goneDocuments — the library's tidying, issue #46) */
+export interface GoneDocument {
+  path: string
+  name: string
+  conversations: number
+  /** A reading position, bookmarks or a recents entry is kept too */
+  other: boolean
+}
+
 export interface RecentThumbView extends RecentThumb {
   /** 1-based page of the saved reading position, when there is one */
   page?: number
@@ -285,6 +335,11 @@ export type AiErrorCode =
   | 'ai-disabled'
   | 'ai-chatgpt-signed-out'
   | 'ai-chatgpt-session-expired'
+  | 'ai-chatgpt-desktop-signed-out'
+  | 'ai-chatgpt-host-missing'
+  | 'ai-chatgpt-host-outdated'
+  | 'ai-chatgpt-host-failed'
+  | 'ai-chatgpt-host-denied'
   | 'ai-subscription-limit'
   | 'ai-chatgpt-login-unsupported'
   | 'ai-chatgpt-login-port-busy'
@@ -402,6 +457,7 @@ export interface FileError {
     | AbstractErrorCode
     | AttachmentErrorCode
     | FileIconErrorCode
+    | McpErrorCode
     | undefined
 }
 
@@ -565,6 +621,12 @@ export interface ModifyAnnotationRequest {
    *  here — so the caller sends the re-measured `quads` in the SAME patch. A
    *  font sent alone is honoured and may leave the text wrapping differently. */
   font?: PdfStandardFont | undefined
+  /** freetext only: re-set the box at another size, in points (issue #53 —
+   *  the size could be chosen for the NEXT box only). Same contract as
+   *  `font`: the engine writes the model's fontSize (the /DA size in the
+   *  appender) and rebuilds the appearance; the re-measured `quads` travel
+   *  in the same patch. */
+  fontSize?: number | undefined
   /** Move/resize (note drag) — page space, top-left origin */
   rect?: PageRect | undefined
   /** Move: translate all geometry by (dx, dy) in page space (top-left origin,
@@ -640,8 +702,10 @@ export type AiProviderId =
   | 'anthropic'
   | 'openai'
   // OpenAI through the user's ChatGPT PLAN instead of an API key: the Codex
-  // sign-in (OAuth) and its chatgpt.com backend. Desktop only — see
-  // src/main/chatgpt-auth.ts for why, and docs/PLATFORMS.md for the divergence.
+  // sign-in (OAuth) and its chatgpt.com backend. Signed in on the desktop
+  // only; the extension borrows that sign-in through the app's native host —
+  // see src/main/chatgpt-auth.ts and src/shared/native-host.ts, and
+  // docs/PLATFORMS.md §25 for the divergence.
   | 'chatgpt'
   | 'azure'
   // First-class hosted OpenAI-compatible services (one key each; base URLs in
@@ -801,10 +865,12 @@ export interface AiConfigView extends AiConfig {
   /** Live model lists as last fetched from the providers ({} until a key
    *  exists and a refresh has succeeded) */
   catalog: AiModelCatalog
-  /** The ChatGPT-plan sign-in. `supported` is false where the OAuth flow
-   *  cannot run (extension, web preview); `account` is the signed-in email,
-   *  '' when signed out. The tokens themselves never leave main. */
-  chatgpt: { supported: boolean; account: string }
+  /** The ChatGPT-plan sign-in. `supported` is false where it cannot run at
+   *  all (the web preview); `account` is the signed-in email, '' when signed
+   *  out. `borrowed`: the extension, which cannot sign in itself and runs on
+   *  the installed desktop app's sign-in through its native host
+   *  (shared/native-host.ts). The tokens themselves never leave main. */
+  chatgpt: { supported: boolean; account: string; borrowed: boolean }
 }
 
 /** Outcome of the ChatGPT sign-in: the new view, or a named failure */
@@ -841,6 +907,12 @@ export interface AiChatRequest {
   /** Web-search mode (server-side provider tool). Only honored by providers
    *  that support it (Anthropic, OpenAI); others ignore it. Absent = 'off'. */
   webSearch?: AiWebSearchMode
+  /** Which language to answer in (src/renderer/src/ai.ts, issue #75). Every
+   *  provider path puts it LAST in the system prompt — after the web-search
+   *  hint and the quote contract — because the rule a model read last is the
+   *  one a weaker model keeps, and an English document, English scaffolding
+   *  and English citation rules all pull the other way. */
+  languageRule?: string
   /** What the request is for, when it is not the chat panel. No provider ever
    *  sees this — it exists so the screenshot fixture layer (src/main/ai.ts)
    *  can tell a semantic-search request from a chat question; the two are
@@ -856,11 +928,22 @@ export type AiCitation =
   | { kind: 'char'; start: number; end: number; citedText: string }
   | { kind: 'quote'; pageNumber: number; quote: string }
   | { kind: 'web'; url: string; title: string }
+  /** An attached earlier conversation the answer drew on — its [SAMTALE n]
+   *  tag, turned into a chip that opens that conversation
+   *  (shared/conversation-context.ts). Never a source in the document. */
+  | { kind: 'conversation'; docPath: string; id: string; docName: string; title: string }
 
 export interface AiContentPart {
   text: string
   citations: AiCitation[]
 }
+
+/** What a streamed delta carries. Absent = answer text to append; 'thinking' =
+ *  the model's reasoning, a liveness signal only; 'block' = a new text block
+ *  opens (native citations attach per block, so the panel needs the boundary
+ *  to put each chip where the final answer will); 'citation' = a native
+ *  citation for the block that is open, carried in the delta's `citation`. */
+export type AiDeltaKind = 'thinking' | 'block' | 'citation'
 
 export interface AiUsage {
   inputTokens: number
@@ -989,6 +1072,71 @@ export interface PdfxApi {
    *  the last one to a crash costs a click. */
   getBookmarks(path: string): Promise<DocBookmark[]>
   setBookmarks(path: string, bookmarks: DocBookmark[]): void
+  // ---------- AI conversations (issue #46, shared/chat-history.ts) ----------
+  /** One document's conversations, newest first. Desktop keeps one file per
+   *  document under userData/chats, the extension an IndexedDB record, dev:web
+   *  localStorage — the same contract everywhere, nothing evicted. */
+  getConversations(path: string): Promise<StoredConversation[]>
+  /** Replace one document's list. `name` rides along so the cross-document
+   *  history can name a document the recents no longer hold. An empty list
+   *  removes the document from the store. Awaited: the panel refreshes its
+   *  list from the store after a delete, so the write must have landed. */
+  setConversations(path: string, name: string, list: StoredConversation[]): Promise<void>
+  /** Every document's conversations without their messages or text,
+   *  newest first — what the cross-document lists show and count */
+  listConversations(): Promise<ConversationMeta[]>
+  /** The conversations every word of the query occurs in, newest first,
+   *  each with a snippet. Runs where the store is (desktop: main, over its
+   *  cached summaries), so a window receives the hits and never the text of
+   *  every conversation. An empty query lists them all. */
+  searchConversations(query: string): Promise<ConversationHit[]>
+  /** Another window or tab wrote a document's conversations (a docked panel
+   *  and a detached assistant edit the same history). `path` is the document,
+   *  or null where the platform cannot say which (dev:web's storage event). */
+  onConversationsChanged(cb: (path: string | null) => void): () => void
+  // ---------- A document's identity across a move (issue #46, shared/doc-identity.ts) ----------
+  /** Record the document's fingerprint (its /ID[0], read from the bytes by
+   *  the renderer) for this path, and carry over the records — conversations,
+   *  bookmarks, reading position, a pinned recents entry — of any other path
+   *  with the same fingerprint whose file is GONE. Awaited before the position
+   *  is read, so a moved file opens where it was left. Returns the paths the
+   *  records followed from ([] = none). */
+  docIdentity(path: string, name: string, fingerprint: string): Promise<string[]>
+  // ---------- The library's tidying (issue #46, shared/chat-library.ts) ----------
+  /** Every document the app keeps anything about — conversations, reading
+   *  position, bookmarks, a recents entry — whose file is known to be GONE,
+   *  with what is kept for it. The same «gone» as docIdentity's: a path that
+   *  cannot be checked (a URL, a picked file, no file access) is never in it. */
+  goneDocuments(): Promise<GoneDocument[]>
+  /** Forget everything kept about these documents: conversations, position,
+   *  bookmarks, fingerprint, recents entry and its picture. For the library's
+   *  «Dokumenter som ikke finnes lenger»; refuses nothing, so the caller
+   *  passes only what goneDocuments named. */
+  forgetDocuments(paths: string[]): Promise<void>
+  // ---------- Notes for AI tools outside the app (shared/research-notes.ts, shared/mcp.ts) ----------
+  /** Desktop: keep this document's notes where the MCP server reads them
+   *  (userData/notes). A no-op elsewhere — neither the extension nor a
+   *  browser tab has a process another program could start. */
+  setDocNotes(record: DocNotes): Promise<void>
+  /** Desktop: the recents whose marks have not been read into a notes record
+   *  since their file last changed — each handed out once per session, and
+   *  only while some tool may read. [] elsewhere. */
+  notesBackfillTargets(): Promise<{ path: string; name: string }[]>
+  /** Desktop: which AI tools are here and connected; null where none can be */
+  mcpStatus(): Promise<McpStatus | null>
+  /** Desktop: turn one tool's switch on or off — its entry in the tool's own
+   *  config written or taken back, and the server's answer to it with it */
+  mcpConnect(target: McpTarget, on: boolean): Promise<McpResult>
+  /** Desktop: the switches and what is kept out; null where no tool can be
+   *  connected */
+  mcpPolicy(): Promise<McpPolicy | null>
+  /** Desktop: what is kept out (the switches turn only through mcpConnect) */
+  mcpSetPolicy(patch: Partial<Pick<McpPolicy, 'excludedDocs' | 'excludedFolders'>>): Promise<McpPolicy | null>
+  /** Desktop: every document with notes or conversations, as the panel lists
+   *  them; [] elsewhere */
+  mcpDocuments(): Promise<McpDocument[]>
+  /** Desktop: a folder to keep out, from the system's folder picker */
+  mcpPickFolder(): Promise<string | null>
   setSettings(patch: Partial<Settings>): void
   /** Write an annotation into the PDF file (EmbedPDF/PDFium; the >150 MB path
    *  goes through src/main/incremental-appender.ts instead) */
@@ -1184,6 +1332,10 @@ export interface PdfxApi {
   onOpenPath(cb: (path: string) => void): () => void
   /** App version for the About/settings surface (package.json / manifest) */
   getVersion(): Promise<string>
+  /** The system's preferred languages, most preferred first (BCP 47 tags):
+   *  the OS's own list on desktop, navigator.languages in a browser. Only the
+   *  AI's default answer language reads it (shared/answer-language.ts). */
+  systemLanguages(): Promise<string[]>
   // ---------- Auto-update (Electron only; no-ops elsewhere) ----------
   // Policy: checks are quiet and automatic, but DOWNLOADING an update is
   // always the user's decision — nothing is fetched or installed silently.
@@ -1223,7 +1375,9 @@ export interface PdfxApi {
    *  Fetch failures keep the previous snapshot — this never makes things worse. */
   aiRefreshModels(force?: boolean): Promise<AiConfigView>
   /** Sign in with a ChatGPT plan (opens the browser, waits for the callback).
-   *  Desktop only — elsewhere resolves with `ai-chatgpt-login-unsupported`. */
+   *  On the desktop the browser sign-in; in the extension, permission to
+   *  start the desktop app's native host and a look at its sign-in; in the
+   *  web preview `ai-chatgpt-login-unsupported`. */
   aiChatgptLogin(): Promise<ChatgptLoginResult>
   /** Forget the ChatGPT tokens */
   aiChatgptLogout(): Promise<AiConfigView>
@@ -1231,8 +1385,11 @@ export interface PdfxApi {
   aiChat(request: AiChatRequest): Promise<AiChatResult>
   aiAbort(requestId: number): void
   /** `kind` absent = answer text to append; 'thinking' = the model's reasoning
-   *  stream, forwarded as a liveness signal only (never rendered as answer) */
-  onAiDelta(cb: (requestId: number, text: string, kind?: 'thinking') => void): () => void
+   *  stream, forwarded as a liveness signal only (never rendered as answer);
+   *  'block'/'citation' = native citations as they arrive (see AiDeltaKind) */
+  onAiDelta(
+    cb: (requestId: number, text: string, kind?: AiDeltaKind, citation?: AiCitation) => void
+  ): () => void
   // ---------- Detached assistant (chat in its own window/tab) ----------
   /** Open (or focus) the assistant surface for a document: a second
    *  BrowserWindow on desktop, a separate viewer.html tab in the extension,

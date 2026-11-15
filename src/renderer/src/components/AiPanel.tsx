@@ -16,15 +16,18 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type {
   AiCitation,
   AiConfigView,
+  AiContentPart,
   AiImage,
   AiWebSearchMode
 } from '../../../shared/types'
 import { PROVIDER_PROFILES } from '../../../shared/ai-provider-profile'
+import { appendDelta } from '../../../shared/ai-stream'
 import { bridge } from '../bridge'
 import { isSharedWith, markSharedWith } from '../ai-sharing'
 import {
   annotationsDefaultQuestion,
   annotationsQuestion,
+  chatLanguageRule,
   chatSystem,
   scannedPagesNote,
   citationPage,
@@ -33,22 +36,42 @@ import {
   nextAiRequestId,
   prepareDocumentForRequest,
   resolveCitation,
+  streamedAnswer,
   summaryPrompt,
   WAIT_HINT_S
 } from '../ai'
 import { charCitationsToQuotes } from '../ai-retrieval'
+import type { OcrProgress } from '../ocr'
 import { rememberRequestTokenLimit } from '../ai-token-limits'
 import { errorDetail, errorText, t, useLang, locale } from '../i18n'
 import { loadAiTextScale, saveAiTextScale, stepAiTextScale } from '../ai-text-scale'
 import { bubblesWhileTyping } from '../keymap'
-import type { AiDocument, ResolvedCitation } from '../ai'
+import type { AiDocument, ResolvedCitation, StreamCiting } from '../ai'
 import type { PageText } from '../search'
-import type { ChatMessage, StoredConversation } from '../chat-store'
-import { CHATS_LS_KEY, deleteConversation, loadConversations, newConversationId, saveConversations } from '../chat-store'
+import type { ChatMessage, ConversationHit, ConversationMeta, StoredConversation } from '../chat-store'
+import {
+  deleteConversation,
+  listAllConversations,
+  searchAllConversations,
+  loadConversations,
+  newConversationId,
+  onConversationsChanged,
+  requestConversationOpen,
+  saveConversations,
+  takeConversationFor
+} from '../chat-store'
+import { searchConversations, summarizeConversations } from '../../../shared/chat-history'
+import type { AttachedConversation } from '../../../shared/conversation-context'
+import { MAX_CHARS_EACH, attachedBlock, capTranscript, splitConversationTags, transcript } from '../../../shared/conversation-context'
+import { MAX_FILES, attachedFilesBlock, fileTokens } from '../../../shared/file-context'
+import type { AttachedFile } from '../../../shared/file-context'
+import { ATTACHABLE_ACCEPT, readAttachableFile } from '../attach-file'
+import { estimateTokens } from '../ai-retrieval'
+import ConversationPicker from './ConversationPicker'
 import { conversationMarkdown } from '../chat-export'
 import { useResizable } from '../useResizable'
 import type { BoxSize } from '../useResizable'
-import { AssistantBody, renderMarkdown } from './ai-markdown'
+import { AssistantBody } from './ai-markdown'
 import { modelSupportsImages, prettyModelName, providerLabels } from './ai-models'
 import { FallbackChip } from './FallbackChip'
 import { AiSettings } from './AiSettings'
@@ -56,10 +79,11 @@ import { ModelQuickMenu } from './AiModelMenu'
 import type { AiSeed } from './AiQuickPopover'
 import {
   IconChevronDown,
+  IconComment,
+  IconPaperclip,
   IconCopy,
   IconDetach,
   IconGlobe,
-  IconGlobeLive,
   IconGlobeOff,
   IconHistory,
   IconImage,
@@ -137,6 +161,16 @@ interface PanelProps {
   seed: AiSeed | null
   onSeedConsumed(): void
   ensureDocument(): Promise<EnsuredDocument | null>
+  /** Scanned pages being read by OCR. ensureDocument waits for them — the
+   *  landing says why, and how far it has come. */
+  ocrProgress?: OcrProgress | null
+  /** OCR is on request and the scanned pages are not read yet: the no-text
+   *  notice offers to read them */
+  ocrOffer?: boolean
+  onEnableOcr?(): void
+  /** Bumped by the host when the document's text changed under the panel
+   *  (OCR became allowed): the ensured document is read again */
+  docEpoch?: number
   /** Whether the document currently has any annotations (gates the suggestion) */
   hasAnnotations: boolean
   /** Bumped by the viewer (sidebar ✦) to fire the annotations question */
@@ -155,7 +189,7 @@ interface PanelProps {
   onRequestSnip?(): void
   /** Detach the chat into its own window/tab. Only the DOCKED host passes it
    *  (a detached window has nowhere further to go). */
-  onDetach?(): void
+  onDetach?: (() => void) | undefined
   /** Whole pages rendered as images, for a document with no text layer. Staged
    *  like a snip: they land in the composer with an editable question, and the
    *  chip says exactly which pages will go along — nothing is sent by itself. */
@@ -168,6 +202,18 @@ interface PanelProps {
   currentPage: number
   /** Total pages, so the range field cannot ask for page 900 of 12 */
   pageCount: number
+  /** Open ANOTHER document, for a conversation picked from the cross-document
+   *  history (issue #46): the panel has recorded which conversation first
+   *  (requestConversationOpen), and the panel that ends up showing the
+   *  document picks it up. A tab here, a window or tab elsewhere. */
+  onOpenElsewhere?(docPath: string): void
+  /** Bumped by the host when a conversation handoff names this document and
+   *  the panel is already mounted — the panel then takes it */
+  conversationAskId?: number
+  /** Whether the document was opened with a password. Its conversations are
+   *  then stored WITHOUT images (shared/chat-history.ts withoutImages). A
+   *  function, not a flag: the host learns it from a ref set mid-load. */
+  isLocked?(): boolean
 }
 
 const suggestions = (): string[] => [t('ai.suggestion1'), t('ai.suggestion2'), t('ai.suggestion3')]
@@ -185,6 +231,10 @@ export default function AiPanel({
   seed,
   onSeedConsumed,
   ensureDocument,
+  ocrProgress = null,
+  ocrOffer = false,
+  onEnableOcr,
+  docEpoch = 0,
   hasAnnotations,
   annotsAskId,
   getAnnotationsText,
@@ -200,19 +250,40 @@ export default function AiPanel({
   onRequestPageImages,
   pagesBusy,
   currentPage,
-  pageCount
+  pageCount,
+  onOpenElsewhere,
+  conversationAskId = 0,
+  isLocked
 }: PanelProps): React.JSX.Element | null {
   useLang()
   const [config, setConfig] = useState<AiConfigView | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showModelMenu, setShowModelMenu] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
-  const [conversations, setConversations] = useState<StoredConversation[]>(() => loadConversations(docPath))
-  const [activeChatId, setActiveChatId] = useState<string | null>(() => conversations[0]?.id ?? null)
-  const [messages, setMessages] = useState<PanelMessage[]>(() => conversations[0]?.messages ?? [])
+  // The store is async (issue #46): the list arrives in the load effect below,
+  // which also picks the newest conversation up as the panel's first view
+  const [conversations, setConversations] = useState<StoredConversation[]>([])
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  const [messages, setMessages] = useState<PanelMessage[]>([])
+  /** The history view's search, and whether it spans every document */
+  const [historyQuery, setHistoryQuery] = useState('')
+  const [historyAll, setHistoryAll] = useState(false)
+  /** Every document's conversations, loaded when the view spans them (null =
+   *  not loaded yet) */
+  const [allConversations, setAllConversations] = useState<ConversationMeta[] | null>(null)
+  /** The cross-document search's hits (searched where the store is), and
+   *  the documents whose file is gone — both only while the view spans them */
+  const [allHits, setAllHits] = useState<ConversationHit[] | null>(null)
+  const [goneDocs, setGoneDocs] = useState<ReadonlySet<string>>(new Set())
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
-  const [streamText, setStreamText] = useState('')
+  /** The answer being streamed, as parts so its citation chips show while it
+   *  is written (src/shared/ai-stream.ts) */
+  const [streamParts, setStreamParts] = useState<AiContentPart[]>([])
+  const streamText = streamParts.some((p) => p.text !== '')
+  /** How the request in flight cites: through [KILDE …] markers in the text,
+   *  and into which excerpt its char offsets point (null = the whole document) */
+  const streamCiteRef = useRef<StreamCiting>({ contract: false, excerptDoc: null })
   // The model is reasoning (thinking deltas seen, no answer text yet)
   const [thinking, setThinking] = useState(false)
   /** Seconds spent waiting for the FIRST word of an answer. Only ticks while
@@ -229,6 +300,96 @@ export default function AiPanel({
   const currentIdRef = useRef<number | null>(null)
   const messagesRef = useRef(messages)
   messagesRef.current = messages
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  /** Earlier conversations attached as context (issue #46) — the chips above
+   *  the composer, sent with every question in this conversation until taken
+   *  off, and stored with it (shared/conversation-context.ts) */
+  const [attached, setAttached] = useState<AttachedConversation[]>([])
+  const attachedRef = useRef(attached)
+  attachedRef.current = attached
+  const [pickerOpen, setPickerOpen] = useState(false)
+  /** Local files attached as context (shared/file-context.ts): read once
+   *  when picked, sent with every question until taken off, and — unlike the
+   *  conversations — not stored with the conversation: the text can be large
+   *  and the file is on disk already */
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
+  const attachedFilesRef = useRef(attachedFiles)
+  attachedFilesRef.current = attachedFiles
+  /** The paperclip's list (Emil, 2026-10-24): everything attached, and the
+   *  three ways to add. The chips used to sit in the text field. */
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false)
+  const [attachError, setAttachError] = useState<string | null>(null)
+  const docFileInputRef = useRef<HTMLInputElement>(null)
+  const attachMenuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!attachMenuOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setAttachMenuOpen(false)
+      }
+    }
+    const onDown = (e: PointerEvent): void => {
+      const root = attachMenuRef.current
+      const target = e.target as Node
+      // The paperclip itself toggles; the file dialogs open from inside
+      if (root && !root.contains(target) && !(target instanceof Element && target.closest('.ai-attach-clip'))) {
+        setAttachMenuOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    window.addEventListener('pointerdown', onDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('pointerdown', onDown, true)
+    }
+  }, [attachMenuOpen])
+  const addAttachableFiles = useCallback(async (files: Iterable<File>) => {
+    setAttachError(null)
+    for (const file of files) {
+      if (attachedFilesRef.current.length >= MAX_FILES) {
+        setAttachError(t('ai.filesLimit', { max: String(MAX_FILES) }))
+        return
+      }
+      const result = await readAttachableFile(file)
+      if (!result.ok) {
+        setAttachError(
+          t(
+            result.error === 'ai-file-type' ? 'ai.fileType' : result.error === 'ai-file-no-text' ? 'ai.fileNoText' : 'ai.fileUnreadable',
+            { name: result.name }
+          )
+        )
+        continue
+      }
+      // The same name again replaces the earlier read (the file may have changed)
+      setAttachedFiles((l) => [...l.filter((f) => f.name !== result.name), { name: result.name, text: result.text }])
+    }
+  }, [])
+  /** Per chip: roughly what it costs, or that it is gone (deleted since) */
+  const [attachedInfo, setAttachedInfo] = useState<Record<string, { tokens: number; missing: boolean }>>({})
+  useEffect(() => {
+    let stale = false
+    void Promise.all(
+      attached.map(async (a) => {
+        const conv = (await loadConversations(a.docPath)).find((c) => c.id === a.id)
+        const chars = conv ? capTranscript(transcript(conv), MAX_CHARS_EACH).text.length : 0
+        return [`${a.docPath}\u0000${a.id}`, { tokens: Math.round(estimateTokens(chars)), missing: !conv }] as const
+      })
+    ).then((entries) => {
+      if (!stale) setAttachedInfo(Object.fromEntries(entries))
+    })
+    return () => {
+      stale = true
+    }
+  }, [attached])
+  /** The tags the request in flight numbered — what [SAMTALE n] refers to */
+  const taggedRef = useRef<AttachedConversation[]>([])
+  /** A citation handed over with a conversation, until it can be followed */
+  const pendingCiteRef = useRef<AiCitation | null>(null)
+  const [pendingCiteTick, setPendingCiteTick] = useState(0)
+  const isLockedRef = useRef(isLocked)
+  isLockedRef.current = isLocked
   const pinnedRef = useRef(true)
   const jumpingRef = useRef(false)
   const conversationsRef = useRef(conversations)
@@ -303,10 +464,26 @@ export default function AiPanel({
   /** Annotations staged for the next composer send (sidebar ✦): the block is
    *  fetched and appended at send time, shown as a removable chip until then */
   const [annotsStaged, setAnnotsStaged] = useState(false)
-  /** Composer globe: three web-search modes cycled by click. 'ask' is the
-   *  default — the tool is attached but nothing leaves the machine unless
-   *  the user's own message explicitly asks for a web lookup. */
-  const [webSearch, setWebSearch] = useState<AiWebSearchMode>('ask')
+  /** What the paperclip's badge counts: every chip the list shows */
+  const attachCount =
+    attached.length + attachedFiles.length + pendingImages.length + (stagedPages.length ? 1 : 0) + (annotsStaged ? 1 : 0)
+  // Something new landed (a snip, staged pages, a file, a conversation): show
+  // the list, so the attachment is SEEN to be there — the badge alone is a
+  // number, and a snip drawn on the page would otherwise vanish into it
+  const prevAttachCountRef = useRef(attachCount)
+  useEffect(() => {
+    if (attachCount > prevAttachCountRef.current) setAttachMenuOpen(true)
+    prevAttachCountRef.current = attachCount
+  }, [attachCount])
+  /** Composer globe: web search off or on (Emil, 2026-10-24 — the three-way
+   *  cycle «closed / on request / always» read as confusing). Off is the
+   *  default and sends no tool. On attaches the tool and lets the model
+   *  decide, the way ChatGPT does: it searches when the question asks for
+   *  it, outright or by implication, and not otherwise — and never because
+   *  the document says so (the hint in ai-chat.ts carries that guard). The
+   *  strict «only when the message asks» mode ('ask') lives on for the
+   *  one-click bubble, whose question the reader did not write. */
+  const [webSearch, setWebSearch] = useState<AiWebSearchMode>('off')
   const webSearchRef = useRef(webSearch)
   webSearchRef.current = webSearch
 
@@ -377,14 +554,14 @@ export default function AiPanel({
 
   useEffect(
     () =>
-      bridge.onAiDelta((id, text, kind) => {
+      bridge.onAiDelta((id, text, kind, citation) => {
         if (id !== currentIdRef.current) return
         // Reasoning deltas are liveness, not answer: a reasoning model (Kimi,
         // Claude with utvidet tenking) can spend minutes here before its first
         // content delta, and without this signal the panel sits on «Leser
         // dokumentet …» and reads as hung. The text itself is not rendered.
         if (kind === 'thinking') setThinking(true)
-        else setStreamText((s) => s + text)
+        else setStreamParts((p) => appendDelta(p, text, kind, citation))
       }),
     []
   )
@@ -405,7 +582,15 @@ export default function AiPanel({
   // that belongs in the landing state rather than in an answer that reports the
   // document says nothing. Extraction is cached in the viewer, so this is the
   // same work the first question would have done anyway.
+  const docEpochRef = useRef(docEpoch)
   useEffect(() => {
+    // The document's text changed under us (OCR became allowed): what was
+    // ensured said «no text», so read it again
+    if (docEpochRef.current !== docEpoch) {
+      docEpochRef.current = docEpoch
+      docRef.current = null
+      setDocReady(false)
+    }
     if (!open || docRef.current) return
     let cancelled = false
     void ensureDocument().then((ensured) => {
@@ -416,7 +601,7 @@ export default function AiPanel({
     return () => {
       cancelled = true
     }
-  }, [open, ensureDocument])
+  }, [open, ensureDocument, docEpoch])
 
   // A region snipped for the chat lands as a staged composer attachment
   useEffect(() => {
@@ -455,7 +640,7 @@ export default function AiPanel({
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [messages, streamText, busy])
+  }, [messages, streamParts, busy])
 
   const jumpToBottom = useCallback((): void => {
     const el = scrollRef.current
@@ -479,7 +664,7 @@ export default function AiPanel({
       setPinned(true)
       setInput('')
       setBusy(true)
-      setStreamText('')
+      setStreamParts([])
       setThinking(false)
       setMessages((m) => [...m, { role: 'user', text: trimmed, display, images }])
       // Earlier turns' images ride along in the history — the model needs
@@ -495,6 +680,25 @@ export default function AiPanel({
       const ensured = docRef.current ?? (await ensureDocument())
       docRef.current = ensured
       if (ensured) setDocReady(true)
+      // The attached earlier conversations, read now (one file each) and built
+      // into a block of their own for the system prompt — never the document,
+      // never a user message, so taking a chip off really takes it out
+      const att = attachedRef.current
+      const block = att.length
+        ? attachedBlock(
+            await Promise.all(
+              att.map(async (meta) => ({
+                meta,
+                conversation: (await loadConversations(meta.docPath)).find((c) => c.id === meta.id) ?? null
+              }))
+            )
+          )
+        : null
+      taggedRef.current = block?.tagged ?? []
+      // The attached files the same way: their own block, rebuilt from what
+      // is attached now, and its size taken off the document's budget too
+      const files = attachedFilesRef.current
+      const filesBlock = files.length ? attachedFilesBlock(files) : null
       // Above the model's context window the full text cannot ride along:
       // attach a BM25 excerpt picked for this conversation's questions instead
       // (ai-retrieval.ts). On the everyday path prep.excerpt is null and the
@@ -509,7 +713,8 @@ export default function AiPanel({
                 .filter((m) => m.role === 'user')
                 .map((m) => m.text)
                 .join('\n'),
-              config.catalog
+              config.catalog,
+              (block?.text.length ?? 0) + (filesBlock?.text.length ?? 0)
             )
           : { doc: ensured.doc, excerpt: null }
         : null
@@ -521,18 +726,25 @@ export default function AiPanel({
       // nothing and an invitation to answer about pages nobody attached.
       const shownPages = stagedPagesRef.current
       const imagesOnly = shownPages.length > 0 && ensured?.hasText === false
+      streamCiteRef.current = {
+        contract: config ? PROVIDER_PROFILES[config.provider].citations === 'contract' : false,
+        excerptDoc: prep?.excerpt ? prep.doc : null
+      }
       const result = await bridge.aiChat({
         requestId,
         system:
           chatSystem() +
           (imagesOnly ? scannedPagesNote(shownPages) : '') +
-          (prep?.excerpt && !imagesOnly ? excerptSystemNote() : ''),
+          (prep?.excerpt && !imagesOnly ? excerptSystemNote() : '') +
+          (block?.text ?? '') +
+          (filesBlock?.text ?? ''),
         messages: history,
         document: imagesOnly || !prep ? null : { title: docTitle, text: prep.doc.text },
-        webSearch: webSearchRef.current
+        webSearch: webSearchRef.current,
+        languageRule: chatLanguageRule()
       })
       currentIdRef.current = null
-      setStreamText('')
+      setStreamParts([])
       setThinking(false)
       setBusy(false)
       // What the provider published about the account's token ceiling for this
@@ -558,9 +770,11 @@ export default function AiPanel({
       } else {
         // Char citations point into the excerpt this request attached —
         // resolve them to real pages now, while that exact text is known
-        const parts = prep?.excerpt
+        const cited = prep?.excerpt
           ? charCitationsToQuotes(result.parts, prep.doc)
           : result.parts
+        // [SAMTALE n] tags become chips that open the conversation they name
+        const parts = taggedRef.current.length ? splitConversationTags(cited, taggedRef.current) : cited
         setMessages((m) => [
           ...m,
           {
@@ -609,24 +823,85 @@ export default function AiPanel({
     setShowModelMenu(false)
   }, [open, openSettingsAskId])
 
-  // Another window wrote the shared chat store (a detached assistant and a
-  // docked panel edit the same per-document history). `storage` events fire
-  // only in OTHER windows/tabs, so this can never loop; skipped while busy —
-  // the write-through below persists the settled state right after anyway.
+  /** The document whose list has been loaded once — only that first load
+   *  opens the newest conversation; a refresh never changes what is shown */
+  const loadedForRef = useRef<string | null>(null)
+  const historyAllRef = useRef(historyAll)
+  historyAllRef.current = historyAll
+
+  const refreshAll = useCallback((): void => {
+    void listAllConversations().then(setAllConversations)
+    void bridge.goneDocuments().then((list) => setGoneDocs(new Set(list.map((d) => d.path))))
+  }, [])
+
+  // The document's conversations, from the store (async: desktop's files, the
+  // extension's IndexedDB). The first load shows the newest conversation, as
+  // the panel always has; a HANDOFF (a conversation picked for this document
+  // from the cross-document history) shows that one instead — taken only
+  // while the panel is open, so the host gets to open it first.
   useEffect(() => {
-    const onStorage = (e: StorageEvent): void => {
-      if (e.key !== CHATS_LS_KEY || busy) return
-      const fresh = loadConversations(docPath)
-      setConversations(fresh)
-      const activeId = activeChatIdRef.current
-      if (activeId) {
-        const chat = fresh.find((c) => c.id === activeId)
-        if (chat) setMessages(chat.messages)
+    // Not a dependency: a reload the moment a stream settles would race the
+    // write-through below (its read answered before that write lands)
+    if (busyRef.current) return
+    let cancelled = false
+    const handoff = open ? takeConversationFor(docPath) : null
+    const wanted = handoff?.id ?? null
+    void loadConversations(docPath).then((list) => {
+      if (cancelled) return
+      setConversations(list)
+      const first = loadedForRef.current !== docPath
+      loadedForRef.current = docPath
+      const target = (wanted && list.find((c) => c.id === wanted)) ||
+        (first && !activeChatIdRef.current && messagesRef.current.length === 0 ? list[0] : undefined)
+      if (target) {
+        pinnedRef.current = true
+        setPinned(true)
+        setActiveChatId(target.id)
+        setMessages(target.messages)
+        setAttached(target.attached ?? [])
+        // A conversation asked for by name is what the reader came to see:
+        // it wins over the history list and over the first-run key settings
+        if (wanted) {
+          setShowHistory(false)
+          setShowSettings(false)
+        }
       }
+      // A source chip clicked outside this document: on to its passage, the
+      // same way a click on the chip here goes — once the document is there
+      // to look it up in (the effect below; a fresh tab is still loading it)
+      if (handoff?.citation && target?.id === wanted) {
+        pendingCiteRef.current = handoff.citation
+        setPendingCiteTick((n) => n + 1)
+      }
+    })
+    return () => {
+      cancelled = true
     }
-    window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
-  }, [busy, docPath])
+  }, [docPath, open, conversationAskId])
+
+  // Another window or tab wrote the store (a detached assistant and a docked
+  // panel edit the same per-document history; any window's cross-document
+  // view lists every write). Skipped while busy — the write-through below
+  // persists the settled state right after anyway.
+  useEffect(() => {
+    return onConversationsChanged((path) => {
+      if (busy) return
+      if (path === null || path === docPath) {
+        void loadConversations(docPath).then((fresh) => {
+          setConversations(fresh)
+          const activeId = activeChatIdRef.current
+          if (activeId) {
+            const chat = fresh.find((c) => c.id === activeId)
+            if (chat) {
+              setMessages(chat.messages)
+              setAttached(chat.attached ?? [])
+            }
+          }
+        })
+      }
+      if (historyAllRef.current) refreshAll()
+    })
+  }, [busy, docPath, refreshAll])
 
   // Write-through: persist only settled states (never mid-stream). An aborted
   // send still settles (error message appended, busy=false) and is persisted.
@@ -639,18 +914,20 @@ export default function AiPanel({
       title: existing?.title ?? chatTitle(messages),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
-      messages
+      messages,
+      ...(attached.length ? { attached } : {})
     }
     const next = [chat, ...conversationsRef.current.filter((c) => c.id !== id)]
-    saveConversations(docPath, next)
-    setConversations(next.slice(0, 10)) // mirror the store cap
+    void saveConversations(docPath, docTitle, next, isLockedRef.current?.() ?? false)
+    setConversations(next)
     if (activeChatIdRef.current !== id) setActiveChatId(id)
-  }, [messages, busy, docPath])
+  }, [messages, busy, docPath, docTitle, attached])
 
   const startNewChat = useCallback((): void => {
     if (busy) return
     setActiveChatId(null)
     setMessages([])
+    setAttached([])
     setShowHistory(false)
     pinnedRef.current = true
     setPinned(true)
@@ -666,6 +943,7 @@ export default function AiPanel({
       setPinned(true)
       setActiveChatId(id)
       setMessages(chat.messages)
+      setAttached(chat.attached ?? [])
       setShowHistory(false)
     },
     [busy]
@@ -673,24 +951,91 @@ export default function AiPanel({
 
   const removeConversation = useCallback(
     (id: string): void => {
-      const next = deleteConversation(docPath, id)
-      setConversations(next)
+      void deleteConversation(docPath, docTitle, id, isLockedRef.current?.() ?? false).then((next) => {
+        setConversations(next)
+        if (historyAllRef.current) refreshAll()
+      })
       if (activeChatIdRef.current === id) {
         setActiveChatId(null)
         setMessages([]) // stay in the history view
       }
     },
-    [docPath]
+    [docPath, docTitle, refreshAll]
   )
 
   const toggleHistory = useCallback((): void => {
     if (busy) return
     setShowHistory((s) => {
-      if (!s) setConversations(loadConversations(docPath)) // fresh across windows
+      if (!s) {
+        void loadConversations(docPath).then(setConversations) // fresh across windows
+        if (historyAllRef.current) refreshAll()
+      }
       return !s
     })
     setShowSettings(false)
-  }, [busy, docPath])
+  }, [busy, docPath, refreshAll])
+
+  // The history view (issue #46): this document's conversations, or every
+  // document's, each filtered by the search — one list, one row shape
+  const setHistoryScope = useCallback(
+    (all: boolean): void => {
+      setHistoryAll(all)
+      if (all) refreshAll()
+    },
+    [refreshAll]
+  )
+
+  // Across documents the search runs where the store is (a moment after
+  // typing stops, so a fast typist sends one query, not ten); this
+  // document's own conversations are searched here, where they already are
+  useEffect(() => {
+    if (!historyAll || !historyQuery.trim()) {
+      setAllHits(null)
+      return
+    }
+    let stale = false
+    const id = window.setTimeout(() => {
+      void searchAllConversations(historyQuery).then((hits) => {
+        if (!stale) setAllHits(hits)
+      })
+    }, 150)
+    return () => {
+      stale = true
+      window.clearTimeout(id)
+    }
+  }, [historyAll, historyQuery, allConversations])
+
+  const historyHits = useMemo<ConversationHit[]>(() => {
+    if (!historyAll) {
+      return searchConversations(summarizeConversations({ path: docPath, name: docTitle, conversations }), historyQuery)
+    }
+    if (historyQuery.trim()) return allHits ?? []
+    return (allConversations ?? []).map((c) => ({ ...c, snippet: null }))
+  }, [historyAll, allConversations, allHits, docPath, docTitle, conversations, historyQuery])
+
+  /** A row clicked: this document's conversation opens here; another
+   *  document's is handed to the host, which opens that document, and the
+   *  panel showing it picks the conversation up */
+  const openHit = useCallback(
+    (hit: ConversationHit): void => {
+      if (hit.docPath === docPath) {
+        openConversation(hit.id)
+        return
+      }
+      if (busy || !onOpenElsewhere) return
+      requestConversationOpen(hit.docPath, hit.id)
+      onOpenElsewhere(hit.docPath)
+    },
+    [docPath, busy, onOpenElsewhere, openConversation]
+  )
+
+  const removeHit = useCallback(
+    (hit: ConversationHit): void => {
+      if (hit.docPath === docPath) removeConversation(hit.id)
+      else void deleteConversation(hit.docPath, hit.docName, hit.id).then(refreshAll)
+    },
+    [docPath, removeConversation, refreshAll]
+  )
 
   const copyConversation = useCallback((): void => {
     const md = conversationMarkdown(docTitle, messagesRef.current, docRef.current?.doc ?? null)
@@ -711,6 +1056,16 @@ export default function AiPanel({
         bridge.openExternal(citation.url)
         return
       }
+      // An attached conversation the answer drew on: that conversation opens —
+      // here when it is this document's, else in its own document
+      if (citation.kind === 'conversation') {
+        if (citation.docPath === docPath) openConversation(citation.id)
+        else if (onOpenElsewhere) {
+          requestConversationOpen(citation.docPath, citation.id)
+          onOpenElsewhere(citation.docPath)
+        }
+        return
+      }
       let ensured = docRef.current
       if (!ensured) {
         ensured = await ensureDocument()
@@ -729,8 +1084,25 @@ export default function AiPanel({
         onCitationClick({ pageNumber: page, start: 0, end: 0 })
       }
     },
-    [onCitationClick, ensureDocument]
+    [onCitationClick, ensureDocument, docPath, onOpenElsewhere, openConversation]
   )
+  // A handed-over citation waits here until ensureDocument can answer: it is
+  // a new function once the viewer has the document, which re-runs this
+  useEffect(() => {
+    const cite = pendingCiteRef.current
+    if (!cite || !open) return
+    let cancelled = false
+    void ensureDocument().then((ensured) => {
+      if (cancelled || !ensured || pendingCiteRef.current !== cite) return
+      pendingCiteRef.current = null
+      docRef.current = ensured
+      setDocReady(true)
+      void handleCitation(cite)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [ensureDocument, open, pendingCiteTick, handleCitation])
 
   /** The conversation's first excerpt answer — the language hint renders once,
    *  under that answer, not under every excerpt answer */
@@ -774,18 +1146,41 @@ export default function AiPanel({
   // message args, so cancelling loses nothing — the composer text and staged
   // attachments are untouched until the user says send. Every send that
   // actually happens is recorded, in every mode.
-  const [pendingSend, setPendingSend] = useState<{ run: () => void } | null>(null)
+  const [pendingSend, setPendingSend] = useState<{ run: () => void; others: AttachedConversation[]; files: string[] } | null>(null)
   const provider = config?.provider ?? null
+  /** Attached files the strip has already named in this conversation — a
+   *  file is new content on its way to the provider, asked about once */
+  const confirmedFilesRef = useRef(new Set<string>())
+  // Attached conversations are content from OTHER documents: one whose
+  // document has not gone to this provider yet is asked about the same way,
+  // and the strip names it
+  const markShared = useCallback(
+    (others: AttachedConversation[]) => {
+      if (!provider) return
+      markSharedWith(docPath, provider)
+      for (const a of others) markSharedWith(a.docPath, provider)
+    },
+    [provider, docPath]
+  )
   const stageOrRun = useCallback(
     (run: () => void) => {
-      if (config?.access === 'confirm' && provider && !isSharedWith(docPath, provider)) {
-        setPendingSend({ run })
+      const others = provider
+        ? attachedRef.current.filter((a) => a.docPath !== docPath && !isSharedWith(a.docPath, provider))
+        : []
+      const files = attachedFilesRef.current.map((f) => f.name).filter((n) => !confirmedFilesRef.current.has(n))
+      if (
+        config?.access === 'confirm' &&
+        provider &&
+        (!isSharedWith(docPath, provider) || others.length > 0 || files.length > 0)
+      ) {
+        setPendingSend({ run, others, files })
         return
       }
-      if (provider) markSharedWith(docPath, provider)
+      markShared(attachedRef.current)
+      for (const n of files) confirmedFilesRef.current.add(n)
       run()
     },
-    [config?.access, provider, docPath]
+    [config?.access, provider, docPath, markShared]
   )
 
   /** Composer send: takes the staged images/annotations along and clears them.
@@ -793,6 +1188,7 @@ export default function AiPanel({
    *  bubble shows only the user's (editable) question. */
   const sendFromComposer = useCallback(() => {
     if (!input.trim() || busy) return
+    setAttachMenuOpen(false) // the list is for staging; the answer is what comes next
     stageOrRun(() => {
       const imgs = pendingImages
       setPendingImages([])
@@ -881,62 +1277,159 @@ export default function AiPanel({
           )}
         </div>
       )}
+      {/* The paperclip's list: what is attached, each with its ×, and the
+          three ways to add. In the flow above the composer like the picker,
+          never over the answer. */}
+      {attachMenuOpen && !pickerOpen && (
+        <div className="ai-conv-picker ai-attach-menu" ref={attachMenuRef} role="dialog" aria-label={t('ai.attachMenuTitle')}>
+          <div className="ai-conv-picker-head">{t('ai.attachMenuTitle')}</div>
+          <p className="ai-conv-picker-note">{t('ai.attachMenuNote')}</p>
+          {annotsStaged || pendingImages.length > 0 || attached.length > 0 || attachedFiles.length > 0 ? (
+            <div className="ai-attach-row">
+              {/* Earlier conversations attached as context: they go with every
+                  question here until taken off — the chip IS the control */}
+              {attached.map((a) => {
+                const info = attachedInfo[`${a.docPath}\u0000${a.id}`]
+                return (
+                  <div
+                    key={`${a.docPath}\u0000${a.id}`}
+                    className={`ai-attach ai-attach-conv${info?.missing ? ' is-missing' : ''}`}
+                    title={[a.docName, `«${a.title}»`, info?.missing ? t('ai.attachedMissing') : info ? t('ai.attachedTokens', { tokens: String(info.tokens) }) : '']
+                      .filter(Boolean)
+                      .join('\n')}
+                  >
+                    <IconComment size={12} />
+                    <span className="ai-attach-conv-text">{a.docPath === docPath ? a.title : `${a.docName}: ${a.title}`}</span>
+                    <button
+                      className="ai-attach-x"
+                      title={t('ai.removeAttachedTip')}
+                      onClick={() => setAttached((l) => l.filter((x) => !(x.docPath === a.docPath && x.id === a.id)))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )
+              })}
+              {attachedFiles.map((f) => (
+                <div
+                  key={f.name}
+                  className="ai-attach ai-attach-conv"
+                  title={`${f.name}\n${t('ai.attachedTokens', { tokens: String(fileTokens(f)) })}${f.text.length > 40_000 ? t('ai.fileCut') : ''}`}
+                >
+                  <IconPaperclip size={12} />
+                  <span className="ai-attach-conv-text">{f.name}</span>
+                  <button
+                    className="ai-attach-x"
+                    title={t('ai.removeFileTip')}
+                    onClick={() => setAttachedFiles((l) => l.filter((x) => x.name !== f.name))}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {/* Which pages are going along, in words — a row of thumbnails does
+                  not tell you whether page 7 or page 8 is in the request. */}
+              {stagedPages.length > 0 && (
+                <div className="ai-attach ai-attach-pages">
+                  {t('ai.pagesChip', { pages: pageListLabel(stagedPages) })}
+                  <button
+                    className="ai-attach-x"
+                    title={t('ai.removePagesTip')}
+                    onClick={() => {
+                      setStagedPages([])
+                      setPendingImages([])
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+              {annotsStaged && (
+                <div className="ai-attach ai-attach-annots">
+                  <IconSparkle size={12} />
+                  {t('ai.annotsChip')}
+                  <button
+                    className="ai-attach-x"
+                    title={t('ai.removeAnnotsTip')}
+                    onClick={() => {
+                      setAnnotsStaged(false)
+                      // A pristine default question goes with it; edits are kept
+                      setInput((i) => (i === annotationsDefaultQuestion() ? '' : i))
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+              {pendingImages.map((img, i) => (
+                <div className="ai-attach" key={i}>
+                  <img src={`data:${img.mediaType};base64,${img.dataBase64}`} alt={t('ai.imageAlt')} />
+                  <button
+                    className="ai-attach-x"
+                    title={t('ai.removeImageTip')}
+                    onClick={() => setPendingImages((l) => l.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="ai-attach-menu-empty">{t('ai.attachMenuEmpty')}</p>
+          )}
+          {attachError && <p className="ai-attach-menu-empty">{attachError}</p>}
+          <div className="ai-attach-menu-acts">
+            <button
+              className="btn-secondary"
+              title={t('ai.attachConvsTip')}
+              disabled={busy || !!pendingSend}
+              onClick={() => setPickerOpen(true)}
+            >
+              <IconComment size={14} />
+              {t('ai.attachMenuConv')}
+            </button>
+            <button
+              className="btn-secondary"
+              disabled={!visionOk}
+              title={visionOk ? t('ai.attachTip') : noVisionTip}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <IconImage size={14} />
+              {t('ai.attachMenuImage')}
+            </button>
+            <button className="btn-secondary" title={t('ai.attachFileTip')} onClick={() => docFileInputRef.current?.click()}>
+              <IconPaperclip size={14} />
+              {t('ai.attachMenuFile')}
+            </button>
+          </div>
+        </div>
+      )}
+      {pickerOpen && (
+        <ConversationPicker
+          docPath={docPath}
+          activeId={activeChatId}
+          attached={attached}
+          receiverName={receiverName}
+          onApply={(list) => {
+            setAttached(list)
+            setPickerOpen(false)
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       {/* ChatGPT-style field: the textarea and its controls live INSIDE one
           rounded surface — the buttons sit bottom-right, never beside it. */}
       <div className="ai-composer-field">
-        {(annotsStaged || pendingImages.length > 0) && (
-          <div className="ai-attach-row">
-            {/* Which pages are going along, in words — a row of thumbnails does
-                not tell you whether page 7 or page 8 is in the request. */}
-            {stagedPages.length > 0 && (
-              <div className="ai-attach ai-attach-pages">
-                {t('ai.pagesChip', { pages: pageListLabel(stagedPages) })}
-                <button
-                  className="ai-attach-x"
-                  title={t('ai.removePagesTip')}
-                  onClick={() => {
-                    setStagedPages([])
-                    setPendingImages([])
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            {annotsStaged && (
-              <div className="ai-attach ai-attach-annots">
-                <IconSparkle size={12} />
-                {t('ai.annotsChip')}
-                <button
-                  className="ai-attach-x"
-                  title={t('ai.removeAnnotsTip')}
-                  onClick={() => {
-                    setAnnotsStaged(false)
-                    // A pristine default question goes with it; edits are kept
-                    setInput((i) => (i === annotationsDefaultQuestion() ? '' : i))
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            {pendingImages.map((img, i) => (
-              <div className="ai-attach" key={i}>
-                <img src={`data:${img.mediaType};base64,${img.dataBase64}`} alt={t('ai.imageAlt')} />
-                <button
-                  className="ai-attach-x"
-                  title={t('ai.removeImageTip')}
-                  onClick={() => setPendingImages((l) => l.filter((_, j) => j !== i))}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* What is attached lives behind the paperclip now (the list above),
+            counted on the button — the field holds the question alone */}
         {pendingSend && (
           <div className="ai-confirm">
-            <span>{t('ai.confirmChat', { name: receiverName })}</span>
+            <span>
+              {t('ai.confirmChat', { name: receiverName })}
+              {pendingSend.others.length > 0 &&
+                ` ${t('ai.confirmAttached', { names: [...new Set(pendingSend.others.map((a) => a.docName))].join(', ') })}`}
+              {pendingSend.files.length > 0 && ` ${t('ai.confirmFiles', { names: pendingSend.files.join(', ') })}`}
+            </span>
             <div className="ai-confirm-actions">
               <button className="btn-secondary" onClick={() => setPendingSend(null)}>
                 {t('app.cancel')}
@@ -946,7 +1439,8 @@ export default function AiPanel({
                 onClick={() => {
                   const staged = pendingSend
                   setPendingSend(null)
-                  if (provider) markSharedWith(docPath, provider)
+                  markShared(attachedRef.current)
+                  for (const n of staged.files) confirmedFilesRef.current.add(n)
                   staged.run()
                 }}
               >
@@ -996,27 +1490,38 @@ export default function AiPanel({
           />
           {config && PROVIDER_PROFILES[config.provider].webSearch && (
             <button
-              className={`ai-attach-add${webSearch === 'off' ? '' : ` ${webSearch}`}`}
-              title={t(
-                webSearch === 'on'
-                  ? 'ai.webSearchOnTip'
-                  : webSearch === 'ask'
-                    ? 'ai.webSearchAskTip'
-                    : 'ai.webSearchOffTip'
-              )}
-              onClick={() =>
-                setWebSearch((m) => (m === 'off' ? 'ask' : m === 'ask' ? 'on' : 'off'))
-              }
+              className={`ai-attach-add${webSearch === 'off' ? '' : ' on'}`}
+              title={t(webSearch === 'off' ? 'ai.webSearchOffTip' : 'ai.webSearchOnTip')}
+              aria-pressed={webSearch !== 'off'}
+              onClick={() => setWebSearch((m) => (m === 'off' ? 'on' : 'off'))}
             >
-              {webSearch === 'off' ? (
-                <IconGlobeOff size={16} />
-              ) : webSearch === 'on' ? (
-                <IconGlobeLive size={16} />
-              ) : (
-                <IconGlobe size={16} />
-              )}
+              {webSearch === 'off' ? <IconGlobeOff size={16} /> : <IconGlobe size={16} />}
             </button>
           )}
+          <input
+            ref={docFileInputRef}
+            type="file"
+            accept={ATTACHABLE_ACCEPT}
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) void addAttachableFiles([...e.target.files])
+              e.target.value = ''
+            }}
+          />
+          <button
+            className={`ai-attach-add ai-attach-clip${attachCount ? ' is-on' : ''}`}
+            title={t('ai.attachBtnTip')}
+            aria-expanded={attachMenuOpen}
+            disabled={!!pendingSend}
+            onClick={() => {
+              setPickerOpen(false)
+              setAttachMenuOpen((o) => !o)
+            }}
+          >
+            <IconPaperclip size={16} />
+            {attachCount > 0 && <span className="ai-attach-count">{attachCount}</span>}
+          </button>
           {onRequestSnip && (
             <button
               className="ai-attach-add"
@@ -1027,14 +1532,6 @@ export default function AiPanel({
               <IconSnip size={16} />
             </button>
           )}
-          <button
-            className="ai-attach-add"
-            disabled={!visionOk}
-            title={visionOk ? t('ai.attachTip') : noVisionTip}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <IconImage size={16} />
-          </button>
           {busy ? (
             <button className="ai-send" title={t('ai.stopTip')} onClick={stop}>
               <IconStop size={15} />
@@ -1195,32 +1692,57 @@ export default function AiPanel({
       ) : showHistory ? (
         <div className="ai-history">
           <div className="ai-history-heading">{t('ai.historyTitle')}</div>
-          {conversations.length === 0 ? (
-            <p className="ai-history-empty">{t('ai.historyEmpty')}</p>
+          <input
+            className="ai-history-search"
+            type="search"
+            placeholder={t('ai.historySearch')}
+            value={historyQuery}
+            onChange={(e) => setHistoryQuery(e.target.value)}
+            autoFocus
+          />
+          <label className="theme-menu-toggle ai-history-scope">
+            <span>{t('ai.historyAllDocs')}</span>
+            <input type="checkbox" checked={historyAll} onChange={(e) => setHistoryScope(e.target.checked)} />
+          </label>
+          {historyAll && allConversations === null ? null : historyHits.length === 0 ? (
+            <p className="ai-history-empty">
+              {t(historyQuery.trim() ? 'ai.historyNoHits' : historyAll ? 'ai.historyEmptyAll' : 'ai.historyEmpty')}
+            </p>
           ) : (
-            conversations.map((c) => (
-              <div
-                key={c.id}
-                className={`ai-history-item${c.id === activeChatId ? ' is-active' : ''}`}
-                onClick={() => openConversation(c.id)}
-              >
-                <span className="ai-history-title">{c.title}</span>
-                <span className="ai-history-meta">
-                  {new Date(c.updatedAt).toLocaleDateString(locale())} ·{' '}
-                  {t('ai.historyMessages', { count: String(c.messages.length) })}
-                </span>
-                <button
-                  className="ai-history-delete"
-                  title={t('ai.historyDeleteTip')}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    removeConversation(c.id)
-                  }}
+            historyHits.map((c) => {
+              const own = c.docPath === docPath
+              return (
+                <div
+                  key={`${c.docPath}\u0000${c.id}`}
+                  className={`ai-history-item${own && c.id === activeChatId ? ' is-active' : ''}`}
+                  onClick={() => openHit(c)}
+                  title={own ? undefined : t('ai.historyOpenElsewhereTip')}
                 >
-                  ✕
-                </button>
-              </div>
-            ))
+                  <span className="ai-history-title">{c.title}</span>
+                  {historyAll && (
+                    <span className="ai-history-doc">
+                      {c.docName}
+                      {goneDocs.has(c.docPath) && <span className="conv-gone-tag">{t('lib.fileMissing')}</span>}
+                    </span>
+                  )}
+                  <span className="ai-history-meta">
+                    {new Date(c.updatedAt).toLocaleDateString(locale())} ·{' '}
+                    {t('ai.historyMessages', { count: String(c.messageCount) })}
+                  </span>
+                  {c.snippet && <span className="ai-history-snippet">{c.snippet}</span>}
+                  <button
+                    className="ai-history-delete"
+                    title={t('ai.historyDeleteTip')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      removeHit(c)
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )
+            })
           )}
         </div>
       ) : messages.length === 0 && !busy ? (
@@ -1244,9 +1766,19 @@ export default function AiPanel({
                 </button>
               </div>
             )}
+            {!docRef.current && ocrProgress && (
+              <div className="ai-notice">
+                <p>{t('ai.ocrReading', { done: ocrProgress.done, total: ocrProgress.total })}</p>
+              </div>
+            )}
             {docRef.current && !docRef.current.hasText && (
               <div className="ai-notice">
                 <p>{t('ai.calloutNoText')}</p>
+                {ocrOffer && onEnableOcr && (
+                  <button className="btn-primary" onClick={onEnableOcr} title={t('ocr.enableTip')}>
+                    {t('ocr.enable')}
+                  </button>
+                )}
               </div>
             )}
             {aiOff ? offNotice : composer}
@@ -1270,6 +1802,11 @@ export default function AiPanel({
                             alt={t('ai.imageAlt')}
                           />
                         ))}
+                      </div>
+                    )}
+                    {!!m.imagesWithheld && (
+                      <div className="ai-msg-withheld">
+                        {t('ai.imagesWithheld', { count: String(m.imagesWithheld) })}
                       </div>
                     )}
                     {m.display ?? m.text}
@@ -1324,7 +1861,13 @@ export default function AiPanel({
               {busy && (
                 <div className="ai-msg ai-assistant">
                   {streamText ? (
-                    renderMarkdown(streamText)
+                    // Chips as they arrive; the settled message replaces this
+                    // with the same parts, so nothing moves when it lands
+                    <AssistantBody
+                      parts={splitConversationTags(streamedAnswer(streamParts, streamCiteRef.current), taggedRef.current)}
+                      doc={docRef.current?.doc ?? null}
+                      onCitation={handleCitation}
+                    />
                   ) : (
                     // «Tenker …» once reasoning deltas arrive — the difference
                     // between a model that is working and one that is not

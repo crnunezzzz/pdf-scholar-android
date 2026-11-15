@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SearchMatch, SearchOptions } from '../search'
+import type { OcrProgress } from '../ocr'
 import { clearSearchHistory, loadSearchHistory } from '../search-history'
 import { loadSearchListOpen, saveSearchListOpen } from '../search-list-pref'
 import { IconList } from './icons'
@@ -38,6 +39,17 @@ interface Props {
   matches: SearchMatch[]
   index: number
   busy: boolean
+  /** Pages still being read by OCR (scanned pages and the images of pages
+   *  with text) — the hits so far show already, and the note line says how
+   *  far the reading has come */
+  ocr: OcrProgress | null
+  /** The scanned pages alone among `ocr` — what decides whether the note
+   *  speaks of scanned pages, of images, or of both */
+  ocrScan: OcrProgress | null
+  /** OCR is on request and this document's scanned pages are not read: the
+   *  note line says so and offers to read them */
+  ocrOffer: boolean
+  onEnableOcr(): void
   /** Search mode: exact text or AI-semantic */
   mode: 'text' | 'ai'
   onModeChange(mode: 'text' | 'ai'): void
@@ -73,6 +85,10 @@ export default function SearchBar({
   matches,
   index,
   busy,
+  ocr,
+  ocrScan,
+  ocrOffer,
+  onEnableOcr,
   mode,
   onModeChange,
   aiStatus,
@@ -274,7 +290,8 @@ export default function SearchBar({
   }, [index, aiIndex])
 
   const count = matches.length
-  const textStatus = busy
+  // «Ingen treff» is not true yet while pages are still being read
+  const textStatus = busy || (ocr && count === 0 && query.trim() !== '')
     ? t('search.searching')
     : query.trim() === ''
       ? ''
@@ -499,6 +516,25 @@ export default function SearchBar({
             }}
           >
             {t('search.historyClear')}
+          </button>
+        </div>
+      )}
+
+      {ocr && (
+        <div className="search-ai-note">
+          {/* A book with figures has no scanned page, and «skannede sider»
+              read as if the whole book were scanned */}
+          {t(
+            !ocrScan ? 'search.ocrImages' : ocrScan.total === ocr.total ? 'search.ocrPages' : 'search.ocrReading',
+            { done: ocr.done, total: ocr.total }
+          )}
+        </div>
+      )}
+      {ocrOffer && (
+        <div className="search-ai-note">
+          {t('search.ocrOffer')}{' '}
+          <button className="search-ai-link" onClick={onEnableOcr} title={t('ocr.enableTip')}>
+            {t('ocr.enable')}
           </button>
         </div>
       )}

@@ -42,6 +42,14 @@ console.log('\n1. one window, shape-checked')
   check('an active index past the end falls to the first tab', out.active === 0)
   check('no tabs: no window', S.sanitizeSessionWindow({ tabs: [] }) === null && S.sanitizeSessionWindow({ tabs: [null] }) === null)
   check('not an object: no window', S.sanitizeSessionWindow('tabs') === null && S.sanitizeSessionWindow(null) === null)
+  // Android keys tabs on content:// URIs, which name no file: the tab's name
+  // rides along. A desktop strip carries none and must come back unchanged.
+  const named = S.sanitizeSessionWindow({
+    tabs: [{ path: 'content://a/1', name: 'paper.pdf' }, { path: 'b', name: 42 }, { path: 'c', name: '' }, { path: 'd', name: 'x'.repeat(256) }],
+    active: 0
+  })
+  check('a tab name survives; junk names are dropped', named.tabs[0].name === 'paper.pdf' && named.tabs.slice(1).every((t) => !('name' in t)))
+  check('no name, no key', !('name' in S.sanitizeSessionWindow({ tabs: [{ path: 'x' }], active: 0 }).tabs[0]))
 
   const many = S.sanitizeSessionWindow({ tabs: Array.from({ length: 1000 }, (_, i) => ({ path: `p${i}` })), active: 0 })
   check(`at most ${S.SESSION_MAX_TABS} tabs`, many.tabs.length === S.SESSION_MAX_TABS)

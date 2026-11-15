@@ -5,22 +5,48 @@ import type {
   ManualUpdateChannel,
   ReadingPosition,
   RecentFile,
+  SessionTab,
   SessionWindow,
   Settings,
+  TabGroup,
   ThemeName
 } from '../../shared/types'
+import {
+  activeAfterClose,
+  activeAfterCollapse,
+  addTabsToGroup,
+  groupTabs,
+  insertOpened,
+  isHidden,
+  moveGroup,
+  nextGroupColor,
+  normalizeGroups,
+  placeTab,
+  removeTabsFromGroups,
+  stepTab,
+  type TabDropTarget,
+  ungroup,
+  visibleTabs
+} from '../../shared/tab-groups'
 import { BREW_UPGRADE_COMMAND, RELEASES_PAGE_URL } from '../../shared/update-channel'
-import { bridge, isElectron } from './bridge'
+import { bridge, hasAppTabs, isAndroid, isElectron } from './bridge'
+import { movedFromLabel, positionFor, reportIdentity } from './doc-identity'
 import { errorText, setLanguage, t, useLang } from './i18n'
 import { commandForEvent, isKeyboardCaptured, setKeymapOverrides } from './keymap'
 import { applyPageTune, tuneTitleBar } from './theme-tune'
+import { applyReadingFont, loadReadingFont } from './reading-font'
 import { applyTabIcon } from './tab-icon'
 import { createDocRegistry } from './doc-registry'
 import { emitLocalDocEvent } from './local-doc-events'
 import { browserCurrentBytes } from './annotation-engine-browser'
 import PdfViewer from './components/PdfViewer'
+import AiToolsDialog, { onOpenAiTools } from './components/AiToolsDialog'
+import { runNotesBackfill } from './notes-backfill'
 import TabBar from './components/TabBar'
 import Welcome from './components/Welcome'
+import MosaicDrop, { MOSAIC_ROLES } from './components/MosaicDrop'
+import type { MosaicRole } from './components/MosaicDrop'
+import { dragCarriesTab } from './drag-types'
 import { DEFAULT_SETTINGS as FALLBACK_SETTINGS } from '../../shared/defaults'
 
 interface OpenTab {
@@ -36,6 +62,12 @@ interface OpenTab {
    *  as its own tab: main keeps one draft per path, the local doc bus keeps
    *  the two views converged, and docRegistry keeps the bookkeeping honest. */
   splitDoc: { payload: FilePayload; initialPosition: ReadingPosition | null } | null
+  /** «Dupliser fane» (issue #53): this tab was opened as a second view of a
+   *  document already on screen in this window, so the viewer must not call
+   *  the draft it loads a recovery. The same three mechanisms as the split
+   *  column carry it: one draft per path in main, the local doc bus between
+   *  the tabs, and docRegistry's count in front of main's per-path Set. */
+  draftOnScreen?: boolean
   /** Bumped when «Åpne i delt visning» names this tab's OWN document — the
    *  same-file split, which only the tab's viewer can open */
   sameSplitNonce: number
@@ -51,7 +83,13 @@ interface OpenTab {
    *  file is read — so a long session costs a row of names at launch, not a
    *  row of parsed documents. See takeLazy for how it stops being lazy. */
   lazy: boolean
+  /** The tab group it belongs to (src/shared/tab-groups.ts), if any */
+  groupId?: string | null
 }
+
+let groupCounter = 0
+/** How long a noted opener stays the opener of the next new tab */
+const OPENER_WINDOW_MS = 5000
 
 /** The file name a restored tab shows before its file is read — what
  *  readFile will name it too */
@@ -149,6 +187,8 @@ export default function App(): React.JSX.Element {
    *  (Emil, 2026-09-02). App-level like the shortcut itself, so it also works
    *  from the library. */
   const [themeToast, setThemeToast] = useState<string | null>(null)
+  /** Bumped by Ctrl+Shift+A: the strip opens (or closes) «Alle faner» */
+  const [tabListSignal, setTabListSignal] = useState(0)
   const themeToastTimerRef = useRef<number | null>(null)
   /** The same pill for any one-line app-level notice */
   const flashNotice = useCallback((text: string, ms: number) => {
@@ -199,6 +239,128 @@ export default function App(): React.JSX.Element {
 
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+  /** The window's tab groups (src/shared/tab-groups.ts). The members are the
+   *  tabs carrying a group's id; the group's place in the strip is theirs. */
+  const [tabGroups, setTabGroups] = useState<TabGroup[]>([])
+  const tabGroupsRef = useRef(tabGroups)
+  tabGroupsRef.current = tabGroups
+  /** The tab that is about to open a document as a tab of its own (an
+   *  attachment: main stages the copy and sends the path back as an ordinary
+   *  open), so the new tab can join its group. Stale after a few seconds — a
+   *  file opened from Explorer later is not the opener's. */
+  const openerRef = useRef<{ tabId: string; at: number } | null>(null)
+  // Every path that changes the strip — a close, a pin, a drop from another
+  // window — is mended here rather than taught the group rules one by one: a
+  // pinned tab or a member cut off from its run leaves its group, an empty
+  // group goes
+  useEffect(() => {
+    const norm = normalizeGroups(tabs, tabGroups)
+    if (norm.tabs !== tabs) setTabs(norm.tabs)
+    if (norm.groups !== tabGroups) setTabGroups(norm.groups)
+  }, [tabs, tabGroups])
+  // The tab being read is never folded away: reaching one in a folded group —
+  // from «Alle faner», a citation chip, a file opened again — unfolds it
+  useEffect(() => {
+    if (atLibrary) return
+    const tab = tabs.find((x) => x.id === activeId)
+    if (!tab || !isHidden(tab, tabGroups)) return
+    setTabGroups((prev) => prev.map((g) => (g.id === tab.groupId ? { ...g, collapsed: false } : g)))
+  }, [tabs, tabGroups, activeId, atLibrary])
+  /** Every tab showing `path` — since «Dupliser fane» (issue #53) there can
+   *  be more than one, and whatever happens to the document (fresh bytes
+   *  from Explorer, a change on disk, a retired draft) happens to all of
+   *  them. The active tab comes first, so «focus the tab» stays where the
+   *  reader is. */
+  const tabsOn = useCallback((path: string): OpenTab[] => {
+    const all = tabsRef.current.filter((t) => t.payload.path === path)
+    const i = all.findIndex((t) => t.id === activeIdRef.current)
+    return i > 0 ? [all[i], ...all.slice(0, i), ...all.slice(i + 1)] : all
+  }, [])
+
+  // ---------- The mosaic: three documents at once ----------
+  //
+  // One tab on half the window, two more on a quarter each — each a whole
+  // viewer with its own toolbar, side by side instead of stacked. The tiles
+  // are tabs that stay tabs: the strip still lists them, the focused one is
+  // the active tab (keyboard, title, strip highlight), and a tap in another
+  // tile moves the focus there. A tab dragged onto a tile (mouse, or finger —
+  // tab-touch-drag.ts) or tapped in the strip takes the FOCUSED tile's place;
+  // one that is already a tile trades places. Closing a tile's tab ends it.
+  const [mosaic, setMosaic] = useState<Record<MosaicRole, string> | null>(null)
+  const mosaicRef = useRef(mosaic)
+  mosaicRef.current = mosaic
+  const roleIn = (m: Record<MosaicRole, string> | null, id: string): MosaicRole | null =>
+    m ? (MOSAIC_ROLES.find((r) => m[r] === id) ?? null) : null
+
+  /** Put a tab into a tile; a tab that already holds another tile trades */
+  const placeInMosaic = useCallback((role: MosaicRole, id: string) => {
+    setMosaic((m) => {
+      if (!m || m[role] === id) return m
+      const from = roleIn(m, id)
+      return from ? { ...m, [role]: id, [from]: m[role] } : { ...m, [role]: id }
+    })
+    setActiveId(id)
+    setAtLibrary(false)
+  }, [])
+
+  /** The view menu's «Show three documents» / «Back to one document» */
+  const toggleMosaic = useCallback((hostId: string) => {
+    if (mosaicRef.current) {
+      setMosaic(null)
+      return
+    }
+    // The two tabs that follow this one in the strip (wrapping round) join it
+    const list = tabsRef.current
+    const at = list.findIndex((x) => x.id === hostId)
+    const others = [...list.slice(at + 1), ...list.slice(0, Math.max(0, at))]
+    if (at < 0 || others.length < 2) return
+    setMosaic({ main: hostId, top: others[0].id, bottom: others[1].id })
+    setActiveId(hostId)
+    setAtLibrary(false)
+  }, [])
+
+  // A tile's tab closed (or the strip changed under it): the mosaic ends
+  useEffect(() => {
+    if (mosaic && !MOSAIC_ROLES.every((r) => tabs.some((x) => x.id === mosaic[r]))) setMosaic(null)
+  }, [tabs, mosaic])
+
+  /** The window's size while the mosaic shows: a tile's width decides how far
+   *  its toolbar tightens (tile-w900/w600/w400 in app.css) — the media queries
+   *  that do it for a whole window only know the window */
+  const [viewSize, setViewSize] = useState({ w: window.innerWidth, h: window.innerHeight })
+  useEffect(() => {
+    if (!mosaic) return
+    const measure = (): void => setViewSize({ w: window.innerWidth, h: window.innerHeight })
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [mosaic])
+  const tileWidthClass = (role: MosaicRole): string => {
+    // Landscape: every tile is half the width. Portrait: the main tile spans it
+    const portrait = viewSize.h > viewSize.w
+    const w = portrait && role === 'main' ? viewSize.w : viewSize.w / 2
+    return `${w <= 900 ? ' tile-w900' : ''}${w <= 660 ? ' tile-w600' : ''}${w <= 420 ? ' tile-w400' : ''}`
+  }
+
+  /** A tab dragged anywhere in the window while the mosaic shows: lay the
+   *  tiles' drop zones over them until the drag ends */
+  const [tabDragging, setTabDragging] = useState(false)
+  useEffect(() => {
+    if (!mosaic) return
+    const start = (e: DragEvent): void => {
+      if (dragCarriesTab(e.dataTransfer)) setTabDragging(true)
+    }
+    const end = (): void => setTabDragging(false)
+    window.addEventListener('dragenter', start, true)
+    window.addEventListener('drop', end, true)
+    window.addEventListener('dragend', end, true)
+    return () => {
+      window.removeEventListener('dragenter', start, true)
+      window.removeEventListener('drop', end, true)
+      window.removeEventListener('dragend', end, true)
+      setTabDragging(false)
+    }
+  }, [mosaic])
   /** Same pattern: the shell key handler is bound once per dep change and
    *  must read the CURRENT theme when cycling, not the one at bind time. */
   const settingsRef = useRef(settings)
@@ -235,6 +397,11 @@ export default function App(): React.JSX.Element {
   // exactly the shipped CSS. The native window-controls overlay follows: the
   // static map (MUST mirror --bg-titlebar / --text in app.css) unless the
   // active tone derives its own pair.
+  // The reading font, once at start: a renderer-only preference read from
+  // the same store the menu writes, so every window of the app agrees with it
+  useEffect(() => {
+    applyReadingFont(loadReadingFont())
+  }, [])
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme
     applyPageTune(resolvedTheme, settings.themeTune, settings.customTone, settings.nightTone)
@@ -341,7 +508,8 @@ export default function App(): React.JSX.Element {
       const next = prev.filter((t) => t.id !== id)
       setActiveId((current) => {
         if (current !== id) return current
-        return next[Math.min(index, next.length - 1)]?.id ?? null
+        // Its neighbour — passing over tabs folded away in a group
+        return activeAfterClose(next, tabGroupsRef.current, index)
       })
       return next
     })
@@ -434,19 +602,22 @@ export default function App(): React.JSX.Element {
 
   const openPayload = useCallback(
     async (payload: FilePayload) => {
-      const existing = tabsRef.current.find((t) => t.payload.path === payload.path)
+      const twins = tabsOn(payload.path)
+      const existing = twins[0]
       if (existing) {
         setError(null)
         // A restored tab opened from outside before it was ever shown: these
         // bytes are its first, so this is where main hears of it — taken now,
         // before the tab is shown, so the lazy loader does not read it again
+        // (a lazy tab is alone on its path: the session holds one per path)
         const wasLazy = takeLazy(existing.id)
         // The file may have changed on disk since the tab loaded (opening an
         // updated PDF from Explorer, or dropping a same-named file, must never
         // show stale bytes). Reload with the fresh payload — unless the tab
         // has unsaved annotations, which must not be lost to an external
         // update without the user getting a chance to keep them as a copy.
-        if (dirtyTabsRef.current.has(existing.id)) {
+        // Duplicates share the draft, so one of them dirty is all of them.
+        if (twins.some((t) => dirtyTabsRef.current.has(t.id))) {
           const verdict = await confirmExternalUpdateVerdict(
             existing.payload.path,
             existing.payload.name
@@ -456,21 +627,28 @@ export default function App(): React.JSX.Element {
             return
           }
           await discardDraft(existing.payload.path)
-          setTabDirty(existing.id, false)
+          for (const t of twins) setTabDirty(t.id, false)
         }
         goToTab(existing.id)
-        const initialPosition = await bridge.getPosition(payload.path)
+        const initialPosition = await positionFor(payload)
         if (wasLazy) docRegistry.acquire(payload.path)
+        const ids = new Set(twins.map((t) => t.id))
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === existing.id
+            ids.has(t.id)
               ? { ...t, payload, initialPosition, epoch: t.epoch + 1, lazy: false }
               : t
           )
         )
         return
       }
-      const initialPosition = await bridge.getPosition(payload.path)
+      const initialPosition = await positionFor(payload)
+      // A moved or renamed file whose records just followed it (issue #46):
+      // say so once, so a history that appears out of nowhere is explained
+      void reportIdentity(payload).then((from) => {
+        if (from.length > 0)
+          flashNotice(t('app.identityRebound', { from: movedFromLabel(from[0], payload) }), 3600)
+      })
       const tab: OpenTab = {
         id: `tab-${++tabCounter}`,
         payload,
@@ -482,11 +660,15 @@ export default function App(): React.JSX.Element {
         lazy: false
       }
       docRegistry.acquire(payload.path)
-      setTabs((prev) => [...prev, tab])
+      // Opened from a tab a moment ago (an attachment): into that tab's group
+      const opener = openerRef.current
+      openerRef.current = null
+      const openerId = opener && Date.now() - opener.at < OPENER_WINDOW_MS ? opener.tabId : null
+      setTabs((prev) => insertOpened(prev, tab, openerId))
       goToTab(tab.id)
       setError(null)
     },
-    [confirmExternalUpdateVerdict, setTabDirty, goToTab]
+    [confirmExternalUpdateVerdict, setTabDirty, goToTab, flashNotice, tabsOn]
   )
 
   /** Called by the viewer when Save/Ctrl+S finds the file changed outside the
@@ -499,21 +681,22 @@ export default function App(): React.JSX.Element {
     async (path: string, name: string): Promise<'save' | 'discard' | 'cancel'> => {
       const verdict = await confirmExternalUpdateVerdict(path, name)
       if (verdict === 'cancel') return verdict
-      const existing = tabsRef.current.find((t) => t.payload.path === path)
+      const twins = tabsOn(path)
       await discardDraft(path)
-      if (existing) setTabDirty(existing.id, false)
+      for (const t of twins) setTabDirty(t.id, false)
       const result = await bridge.readFile(path)
-      if (existing && !('error' in result)) {
-        const initialPosition = await bridge.getPosition(path)
+      if (twins.length > 0 && !('error' in result)) {
+        const initialPosition = await positionFor(result)
+        const ids = new Set(twins.map((t) => t.id))
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === existing.id ? { ...t, payload: result, initialPosition, epoch: t.epoch + 1 } : t
+            ids.has(t.id) ? { ...t, payload: result, initialPosition, epoch: t.epoch + 1 } : t
           )
         )
       }
       return verdict
     },
-    [confirmExternalUpdateVerdict, setTabDirty, goToTab]
+    [confirmExternalUpdateVerdict, setTabDirty, goToTab, tabsOn]
   )
 
   /** May the split column's document go? The same unsaved-changes guard a tab
@@ -589,7 +772,7 @@ export default function App(): React.JSX.Element {
         setError(t('app.openFailed', { error: errorText(result) }))
         return false
       }
-      const initialPosition = await bridge.getPosition(path)
+      const initialPosition = await positionFor(result)
       // Re-read the tab: the guard and the read are awaits, and the split may
       // have been closed under us in the meantime
       const outgoing = tabsRef.current.find((t) => t.id === hostTabId)?.splitDoc
@@ -653,7 +836,7 @@ export default function App(): React.JSX.Element {
       }
       const result = await bridge.readFile(split.payload.path)
       if ('error' in result) return
-      const initialPosition = await bridge.getPosition(split.payload.path)
+      const initialPosition = await positionFor(result)
       docRegistry.release(tab.payload.path)
       // The pane's acquire on Y carries over to the tab — no registry change
       setTabs((prev) =>
@@ -679,7 +862,11 @@ export default function App(): React.JSX.Element {
       // The split column's document first, sequentially — two unsaved
       // documents must not stack two dialogs (same rule closeTabs follows)
       if (tab.splitDoc && !(await closeSplitDoc(id))) return false
-      if (dirtyTabsRef.current.has(id)) {
+      // The draft is the path's, not the tab's: while another view of the
+      // document stays open (a duplicated tab, another tab's split column)
+      // the marks go nowhere, so there is nothing to ask about. The LAST view
+      // to go is the one that asks.
+      if (dirtyTabsRef.current.has(id) && docRegistry.count(tab.payload.path) <= 1) {
         const outcome = await confirmCloseVerdict(tab.payload.path, tab.payload.name)
         if (outcome.verdict === 'cancel') {
           reportCloseFailure(outcome)
@@ -717,35 +904,67 @@ export default function App(): React.JSX.Element {
     [closeTabAwait]
   )
 
-  /** Drag a tab to a new position (also Ctrl+Shift+PageUp/PageDown). Pinned
-   *  tabs move among themselves and the rest among themselves: the pinned
-   *  group is always the strip's start, so a drag across the border stops at
-   *  it rather than mixing the two. */
-  const moveTab = useCallback((id: string, toIndex: number) => {
-    setTabs((prev) => {
-      const from = prev.findIndex((t) => t.id === id)
-      if (from === -1) return prev
-      const pinnedCount = prev.filter((t) => t.pinned).length
-      const [lo, hi] = prev[from].pinned ? [0, pinnedCount - 1] : [pinnedCount, prev.length - 1]
-      const to = Math.max(lo, Math.min(hi, toIndex))
-      if (from === to) return prev
-      const next = [...prev]
-      const [moved] = next.splice(from, 1)
-      next.splice(to, 0, moved)
-      return next
-    })
+  /** Drag a tab to where the pointer is (placeTab in tab-groups.ts): beside a
+   *  tab, before or after a group's chip, or past the last tab — which also
+   *  decides its group, so a drag takes a tab into a group and out of it.
+   *  Pinned tabs move among themselves and the rest among themselves. */
+  const placeTabAt = useCallback((id: string, target: TabDropTarget) => {
+    setTabs((prev) => placeTab(prev, tabGroupsRef.current, id, target))
   }, [])
 
-  /** Pin a tab (it joins the end of the pinned group) or let it go (it heads
-   *  the rest) — browsers' rule, so the tab moves as little as it can */
+  /** Pin a tab (it joins the end of the pinned run, leaving any group) or let
+   *  it go (it heads the rest) — browsers' rule, so the tab moves as little
+   *  as it can */
   const pinTab = useCallback((id: string, pinned: boolean) => {
     setTabs((prev) => {
       const tab = prev.find((t) => t.id === id)
       if (!tab || tab.pinned === pinned) return prev
       const rest = prev.filter((t) => t.id !== id)
       const at = rest.filter((t) => t.pinned).length
-      return [...rest.slice(0, at), { ...tab, pinned }, ...rest.slice(at)]
+      return [...rest.slice(0, at), { ...tab, pinned, groupId: null }, ...rest.slice(at)]
     })
+  }, [])
+
+  /** Tab groups, from the tab menu and the group's chip. A new group opens
+   *  its chip's editor so it can be named at once (`editGroupSignal`). */
+  const [editGroupSignal, setEditGroupSignal] = useState<{ id: string; n: number } | null>(null)
+  // Each takes the tabs the menu was opened on: one, or the Ctrl/Shift+click
+  // selection — grouped, added or let go in one step
+  const newTabGroup = useCallback((tabIds: string[]) => {
+    // Unique past a restart too: a restored session brings its own ids
+    const id = `group-${Date.now().toString(36)}-${++groupCounter}`
+    setTabGroups((prev) => [...prev, { id, name: '', color: nextGroupColor(prev), collapsed: false }])
+    setTabs((prev) => groupTabs(prev, tabIds, id))
+    setEditGroupSignal((s) => ({ id, n: (s?.n ?? 0) + 1 }))
+  }, [])
+  const addTabsToTabGroup = useCallback((tabIds: string[], groupId: string) => {
+    setTabs((prev) => addTabsToGroup(prev, tabIds, groupId))
+  }, [])
+  const removeTabsFromTabGroups = useCallback((tabIds: string[]) => {
+    setTabs((prev) => removeTabsFromGroups(prev, tabIds))
+  }, [])
+  const updateTabGroup = useCallback((groupId: string, patch: Partial<Pick<TabGroup, 'name' | 'color'>>) => {
+    setTabGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, ...patch } : g)))
+  }, [])
+  /** Fold a group away, or open it. Folding the group being read shows the
+   *  nearest tab outside it — the library when there is none. */
+  const toggleTabGroup = useCallback((groupId: string) => {
+    const groups = tabGroupsRef.current
+    const group = groups.find((g) => g.id === groupId)
+    if (!group) return
+    if (!group.collapsed && !atLibraryRef.current) {
+      const next = activeAfterCollapse(tabsRef.current, groups, groupId, activeIdRef.current)
+      if (next === null) setAtLibrary(true)
+      else if (next !== activeIdRef.current) setActiveId(next)
+    }
+    setTabGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, collapsed: !g.collapsed } : g)))
+  }, [])
+  const ungroupTabs = useCallback((groupId: string) => {
+    setTabs((prev) => ungroup(prev, groupId))
+  }, [])
+  /** A group's chip dragged over a tab: the whole group moves past it */
+  const moveTabGroup = useCallback((groupId: string, targetId: string) => {
+    setTabs((prev) => moveGroup(prev, groupId, targetId))
   }, [])
 
   /** The path of the tab this window is dragging right now, if any. The native
@@ -813,7 +1032,7 @@ export default function App(): React.JSX.Element {
         setError(t('app.openFailed', { error: errorText(result) }))
         return
       }
-      const initialPosition = await bridge.getPosition(path)
+      const initialPosition = await positionFor(result)
       if (takeLazy(id)) docRegistry.acquire(result.path)
       setTabs((prev) =>
         prev.map((t) =>
@@ -844,7 +1063,7 @@ export default function App(): React.JSX.Element {
         setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, staleOnDisk: true } : t)))
         return
       }
-      const initialPosition = await bridge.getPosition(path)
+      const initialPosition = await positionFor(result)
       setTabs((prev) =>
         prev.map((t) =>
           t.id === id
@@ -858,15 +1077,19 @@ export default function App(): React.JSX.Element {
   )
   const onFileChangedOnDisk = useCallback(
     (path: string) => {
-      const tab = tabsRef.current.find((t) => t.payload.path === path)
-      if (!tab || tab.lazy) return
-      if (dirtyTabsRef.current.has(tab.id)) {
-        setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, staleOnDisk: true } : t)))
+      const twins = tabsOn(path).filter((t) => !t.lazy)
+      if (twins.length === 0) return
+      // One draft per path: a mark in any of the tabs is a mark in all, so
+      // every one of them gets the bar — and the reload below reaches them
+      // all, the notice shown once
+      if (twins.some((t) => dirtyTabsRef.current.has(t.id))) {
+        const ids = new Set(twins.map((t) => t.id))
+        setTabs((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, staleOnDisk: true } : t)))
         return
       }
-      void reloadFromDisk(tab.id, path, true)
+      twins.forEach((tab, i) => void reloadFromDisk(tab.id, path, i === 0))
     },
-    [reloadFromDisk]
+    [reloadFromDisk, tabsOn]
   )
   useEffect(() => bridge.onFileChangedOnDisk(onFileChangedOnDisk), [onFileChangedOnDisk])
   /** The bar's «Last inn på nytt» on a tab holding unsaved marks */
@@ -874,15 +1097,17 @@ export default function App(): React.JSX.Element {
     async (id: string) => {
       const tab = tabsRef.current.find((t) => t.id === id)
       if (!tab) return
-      if (dirtyTabsRef.current.has(id)) {
+      const twins = tabsOn(tab.payload.path)
+      if (twins.some((t) => dirtyTabsRef.current.has(t.id))) {
         const verdict = await confirmExternalUpdateVerdict(tab.payload.path, tab.payload.name)
         if (verdict === 'cancel') return
         await discardDraft(tab.payload.path)
-        setTabDirty(id, false)
+        for (const t of twins) setTabDirty(t.id, false)
       }
-      await reloadFromDisk(id, tab.payload.path, false)
+      // The bar stood on every tab of the path; the answer reloads them all
+      for (const t of twins) await reloadFromDisk(t.id, tab.payload.path, false)
     },
-    [confirmExternalUpdateVerdict, setTabDirty, reloadFromDisk]
+    [confirmExternalUpdateVerdict, setTabDirty, reloadFromDisk, tabsOn]
   )
 
   /** «Save a copy» semantics: continue working in the copy. The edits were
@@ -895,14 +1120,15 @@ export default function App(): React.JSX.Element {
       const tab = tabsRef.current.find((t) => t.id === id)
       if (!tab) return
       const oldPath = tab.payload.path
-      // The save dialog may have overwritten a file that is open in another
-      // tab: that document was just replaced wholesale, so retire its tab
+      // The save dialog may have overwritten a file that is open in OTHER
+      // tabs: that document was just replaced wholesale, so retire those tabs
       // (and any draft of its previous content) before this tab takes over
-      // the path — tabs must stay unique per path.
-      const other = tabsRef.current.find((t) => t.id !== id && t.payload.path === newPath)
-      if (other) {
+      // the path. Not when the copy went onto this tab's own path — its
+      // duplicates show the same document and simply take the new bytes.
+      const others = tabsRef.current.filter((t) => t.id !== id && t.payload.path === newPath)
+      if (others.length > 0 && newPath !== oldPath) {
         await discardDraft(newPath)
-        reallyCloseTab(other.id)
+        for (const other of others) reallyCloseTab(other.id)
       }
       const result = await bridge.readFile(newPath)
       if ('error' in result) return // the copy is safely on disk; stay on the original
@@ -911,13 +1137,14 @@ export default function App(): React.JSX.Element {
         docRegistry.release(oldPath)
         docRegistry.acquire(newPath)
       }
-      const initialPosition = await bridge.getPosition(newPath)
+      const initialPosition = await positionFor(result)
+      const ids = new Set([id, ...(newPath === oldPath ? others.map((t) => t.id) : [])])
       setTabs((prev) =>
         prev.map((t) =>
-          t.id === id ? { ...t, payload: result, initialPosition, epoch: t.epoch + 1 } : t
+          ids.has(t.id) ? { ...t, payload: result, initialPosition, epoch: t.epoch + 1 } : t
         )
       )
-      setTabDirty(id, false)
+      for (const tabId of ids) setTabDirty(tabId, false)
     },
     [reallyCloseTab, setTabDirty]
   )
@@ -928,7 +1155,8 @@ export default function App(): React.JSX.Element {
     // early return below would otherwise make the key do nothing at all.
     if (tabsRef.current.length > 0) setAtLibrary(false)
     setActiveId((current) => {
-      const list = tabsRef.current
+      // The tabs the strip shows: a folded group is passed over
+      const list = visibleTabs(tabsRef.current, tabGroupsRef.current)
       if (list.length < 2) return current
       const index = list.findIndex((t) => t.id === current)
       return list[(index + delta + list.length) % list.length].id
@@ -937,8 +1165,9 @@ export default function App(): React.JSX.Element {
 
   const openPath = useCallback(
     async (path: string) => {
-      const existing = tabsRef.current.find((t) => t.payload.path === path)
-      if (existing && dirtyTabsRef.current.has(existing.id)) {
+      const twins = tabsOn(path)
+      const existing = twins[0]
+      if (existing && twins.some((t) => dirtyTabsRef.current.has(t.id))) {
         const verdict = await confirmExternalUpdateVerdict(path, existing.payload.name)
         if (verdict === 'cancel') {
           // Unsaved annotations trump the external update — just focus the tab
@@ -948,7 +1177,7 @@ export default function App(): React.JSX.Element {
         // 'save' (copy flushed elsewhere) or 'discard': the old draft is no
         // longer needed — drop it and fall through to load the fresh bytes.
         await discardDraft(path)
-        setTabDirty(existing.id, false)
+        for (const t of twins) setTabDirty(t.id, false)
       }
       // Existing-but-clean tabs fall through: re-read so an externally updated
       // file shows its latest bytes (openPayload swaps them into the tab).
@@ -963,7 +1192,58 @@ export default function App(): React.JSX.Element {
       }
       await openPayload(result)
     },
-    [openPayload, confirmExternalUpdateVerdict, setTabDirty, goToTab]
+    [openPayload, confirmExternalUpdateVerdict, setTabDirty, goToTab, tabsOn]
+  )
+
+  /** «Dupliser fane» (issue #53): a second tab on the same document, beside
+   *  the first and at the place it stands — the way a browser duplicates a
+   *  tab. The bytes are read afresh so the copy opens on the draft's live
+   *  state (main resolves the draft behind readFile); from there the local
+   *  doc bus keeps the two converged, the registry counts the second viewer
+   *  without a word to main, and the draft stays the path's: dirty in one
+   *  means dirty in both, and closing one asks nothing while the other
+   *  stands. The copy is never pinned, and lands after the pinned group when
+   *  its source is. A session restore folds duplicates back into one tab
+   *  (session.ts keeps one per path). */
+  const duplicateTab = useCallback(
+    async (id: string) => {
+      const source = tabsRef.current.find((t) => t.id === id)
+      if (!source || source.lazy) return
+      const path = source.payload.path
+      const result = await bridge.readFile(path)
+      if ('error' in result) {
+        setError(t('app.openFailed', { error: errorText(result) }))
+        return
+      }
+      // The source's position is saved on a short debounce and flushed when
+      // it leaves the foreground — read AFTER the file, so a scroll just
+      // before the ask has landed
+      const initialPosition = await positionFor(result)
+      const tab: OpenTab = {
+        id: `tab-${++tabCounter}`,
+        payload: result,
+        initialPosition,
+        epoch: 0,
+        splitDoc: null,
+        sameSplitNonce: 0,
+        pinned: false,
+        lazy: false,
+        draftOnScreen: true,
+        // Beside its source, so in its source's group
+        groupId: source.pinned ? null : (source.groupId ?? null)
+      }
+      docRegistry.acquire(path)
+      setTabs((prev) => {
+        const i = prev.findIndex((x) => x.id === id)
+        if (i === -1) return prev
+        const at = prev[i].pinned ? prev.filter((x) => x.pinned).length : i + 1
+        return [...prev.slice(0, at), tab, ...prev.slice(at)]
+      })
+      if (dirtyTabsRef.current.has(id)) setTabDirty(tab.id, true)
+      goToTab(tab.id)
+      setError(null)
+    },
+    [setTabDirty, goToTab]
   )
 
   /** Ctrl+Shift+T: the tab closed most recently comes back. A closed path that
@@ -1007,16 +1287,22 @@ export default function App(): React.JSX.Element {
         lazyIdsRef.current.add(id)
         return {
           id,
-          payload: { path: s.path, name: baseName(s.path), data: new Uint8Array() },
+          payload: { path: s.path, name: s.name ?? baseName(s.path), data: new Uint8Array() },
           initialPosition: null,
           epoch: 0,
           splitDoc: null,
           sameSplitNonce: 0,
           pinned: s.pinned === true,
-          lazy: true
+          lazy: true,
+          groupId: s.group ?? null
         }
       })
       if (restored.length === 0) return
+      // The session's groups beside any this window has already
+      if (session.groups?.length) {
+        const have = new Set(tabGroupsRef.current.map((g) => g.id))
+        setTabGroups((prev) => [...prev, ...session.groups!.filter((g) => !have.has(g.id))])
+      }
       // Mirrored into the ref at once: a file named on the command line is
       // opened right after this, and openPayload must see these tabs to reuse
       // one rather than open the same document twice
@@ -1051,9 +1337,11 @@ export default function App(): React.JSX.Element {
   const lazyLoadingRef = useRef(new Set<string>())
   useEffect(() => {
     if (atLibrary) return
-    const tab = tabs.find((x) => x.id === activeId)
+    // Every tab on screen: the active one, and in the mosaic all three tiles
+    const onScreen = mosaic ? MOSAIC_ROLES.map((r) => mosaic[r]) : [activeId]
+    for (const tab of tabs.filter((x) => onScreen.includes(x.id))) {
     // Lazy in the state but already taken: openPayload has its bytes in hand
-    if (!tab?.lazy || !lazyIdsRef.current.has(tab.id) || lazyLoadingRef.current.has(tab.id)) return
+    if (!tab.lazy || !lazyIdsRef.current.has(tab.id) || lazyLoadingRef.current.has(tab.id)) continue
     const { id } = tab
     lazyLoadingRef.current.add(id)
     void (async () => {
@@ -1065,7 +1353,7 @@ export default function App(): React.JSX.Element {
         setError(t('app.openFailed', { error: errorText(result) }))
         return
       }
-      const initialPosition = await bridge.getPosition(result.path)
+      const initialPosition = await positionFor(result)
       lazyLoadingRef.current.delete(id)
       if (!takeLazy(id)) return
       docRegistry.acquire(result.path)
@@ -1073,16 +1361,27 @@ export default function App(): React.JSX.Element {
         prev.map((x) => (x.id === id ? { ...x, payload: result, initialPosition, lazy: false } : x))
       )
     })()
-  }, [tabs, activeId, atLibrary, reallyCloseTab])
+    }
+  }, [tabs, activeId, atLibrary, mosaic, reallyCloseTab])
 
   // Report the strip to main for the next launch (desktop; the bridge drops it
   // elsewhere). Debounced while the strip changes, and sent at once when the
   // window goes, so the last tab closed before closing the window counts.
   useEffect(() => {
-    if (!isElectron || !sessionTaken) return
+    if (!hasAppTabs || !sessionTaken) return
     const snapshot = (): SessionWindow => ({
-      tabs: tabs.map((x) => (x.pinned ? { path: x.payload.path, pinned: true } : { path: x.payload.path })),
-      active: Math.max(0, tabs.findIndex((x) => x.id === activeId))
+      tabs: tabs.map((x) => {
+        const tab: SessionTab = x.pinned
+          ? { path: x.payload.path, pinned: true }
+          : x.groupId
+            ? { path: x.payload.path, group: x.groupId }
+            : { path: x.payload.path }
+        // A content:// URI says nothing readable about the file it names
+        if (isAndroid) tab.name = x.payload.name
+        return tab
+      }),
+      active: Math.max(0, tabs.findIndex((x) => x.id === activeId)),
+      ...(tabGroups.length > 0 ? { groups: tabGroups } : {})
     })
     const timer = window.setTimeout(() => bridge.setSessionTabs(snapshot()), 300)
     const flush = (): void => bridge.setSessionTabs(snapshot())
@@ -1091,7 +1390,7 @@ export default function App(): React.JSX.Element {
       window.clearTimeout(timer)
       window.removeEventListener('beforeunload', flush)
     }
-  }, [tabs, activeId, sessionTaken])
+  }, [tabs, tabGroups, activeId, sessionTaken])
 
   // A detached assistant asked for a citation in one of our documents: bring
   // that document's tab forward (and leave the library). The mounted viewer's
@@ -1100,11 +1399,11 @@ export default function App(): React.JSX.Element {
   useEffect(
     () =>
       bridge.onAssistantJumpRequest((path) => {
-        const tab = tabsRef.current.find((t) => t.payload.path === path)
+        const tab = tabsOn(path)[0] // the active one when the path has twins
         if (tab) goToTab(tab.id)
         return false
       }),
-    [goToTab]
+    [goToTab, tabsOn]
   )
 
   // Refresh recents whenever the library comes into view — the last tab
@@ -1127,13 +1426,12 @@ export default function App(): React.JSX.Element {
       const typing = tag === 'INPUT' || tag === 'TEXTAREA'
       const command = commandForEvent(e, typing)
       if (!command) return
-      const moveActiveTab = (delta: number): void => {
+      const moveActiveTab = (delta: -1 | 1): void => {
         const id = activeIdRef.current
-        if (!id) return
-        const at = tabsRef.current.findIndex((t) => t.id === id)
-        if (at === -1) return
+        if (!id || !tabsRef.current.some((t) => t.id === id)) return
         e.preventDefault()
-        moveTab(id, at + delta)
+        // One step, into and out of groups as the browsers do (stepTab)
+        setTabs((prev) => stepTab(prev, tabGroupsRef.current, id, delta))
       }
       switch (command) {
         case 'tab.next':
@@ -1234,6 +1532,46 @@ export default function App(): React.JSX.Element {
           pinTab(tab.id, !tab.pinned)
           break
         }
+        case 'tab.duplicate': {
+          const id = activeIdRef.current
+          if (!id || atLibraryRef.current) break
+          e.preventDefault()
+          void duplicateTab(id)
+          break
+        }
+        case 'tab.search':
+          if (tabsRef.current.length === 0) break
+          e.preventDefault()
+          setTabListSignal((n) => n + 1)
+          break
+        case 'tab.goto1':
+        case 'tab.goto2':
+        case 'tab.goto3':
+        case 'tab.goto4':
+        case 'tab.goto5':
+        case 'tab.goto6':
+        case 'tab.goto7':
+        case 'tab.goto8':
+        case 'tab.last': {
+          // A number past the last tab does nothing, as in the browsers. The
+          // numbers count the tabs the strip shows.
+          const list = visibleTabs(tabsRef.current, tabGroupsRef.current)
+          const target = command === 'tab.last' ? list[list.length - 1] : list[Number(command.slice('tab.goto'.length)) - 1]
+          if (!target) break
+          e.preventDefault()
+          goToTab(target.id)
+          break
+        }
+        case 'doc.copyPath': {
+          const tab = tabsRef.current.find((x) => x.id === activeIdRef.current)
+          if (!tab || atLibraryRef.current) break
+          e.preventDefault()
+          void navigator.clipboard
+            ?.writeText(tab.payload.path)
+            .then(() => flashNotice(t('doc.pathCopied'), 1400))
+            .catch(() => {})
+          break
+        }
         default:
           // Every other command belongs to the viewer, which has its own listener
           break
@@ -1241,7 +1579,7 @@ export default function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cycleTab, closeTab, reopenClosedTab, openDialog, moveTab, pinTab, updateSettings, flashThemeName])
+  }, [cycleTab, closeTab, reopenClosedTab, duplicateTab, openDialog, pinTab, updateSettings, flashThemeName, flashNotice, goToTab])
 
   const onDrop = useCallback(
     async (e: React.DragEvent) => {
@@ -1268,8 +1606,21 @@ export default function App(): React.JSX.Element {
     [openPath, openPayload]
   )
 
+  // «KI-verktøy på maskinen» — one dialog per window, opened from any tab's
+  // gear menu or Merknader tab (AiToolsDialog.tsx)
+  const [aiTools, setAiTools] = useState<{ path: string | undefined } | null>(null)
+  useEffect(() => onOpenAiTools((path) => setAiTools({ path })), [])
+  // Marks of papers not opened since notes were kept, read quietly once the
+  // window has settled — main hands out nothing while no tool may read
+  useEffect(() => {
+    if (!isElectron) return undefined
+    const id = window.setTimeout(() => void runNotesBackfill(), 15_000)
+    return () => window.clearTimeout(id)
+  }, [])
+
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+      {aiTools && <AiToolsDialog focusPath={aiTools.path} onClose={() => setAiTools(null)} />}
       {error && (
         <div className="error-banner" role="alert">
           <span>{error}</span>
@@ -1294,12 +1645,27 @@ export default function App(): React.JSX.Element {
           // Either document in the tab (its own, or the split column's other
           // file) having unsaved changes lights the dot
           dirty: dirtyTabs.has(t.id) || splitDirtyTabs.has(t.id),
-          pinned: t.pinned
+          pinned: t.pinned,
+          tiled: !!roleIn(mosaic, t.id),
+          groupId: t.groupId ?? null
         }))}
+        groups={tabGroups}
+        editGroupSignal={editGroupSignal}
+        onGroupNew={newTabGroup}
+        onGroupAdd={addTabsToTabGroup}
+        onGroupRemove={removeTabsFromTabGroups}
+        onGroupUpdate={updateTabGroup}
+        onGroupToggle={toggleTabGroup}
+        onGroupUngroup={ungroupTabs}
+        onReorderGroup={moveTabGroup}
+        onGroupClose={(groupId) =>
+          void closeTabs(tabsRef.current.filter((x) => x.groupId === groupId).map((x) => x.id))
+        }
         // No tab is the current one while the library is showing — the strip
         // stays, so the open documents are visible and one click away from
         // there, but none of them is what you are looking at.
         activeId={atLibrary ? null : activeId}
+        listSignal={tabListSignal}
         // Fullscreen tucks the strip — but reaching for the top brings it
         // back with the toolbar. Only worth it with MORE THAN ONE tab: with a
         // single document open the strip is a title bar, and revealing it adds
@@ -1309,7 +1675,15 @@ export default function App(): React.JSX.Element {
         hidden={
           !atLibrary && (presenting || (fullscreen && (tabs.length < 2 || !chromeVisible)))
         }
-        onSelect={goToTab}
+        onSelect={(id) => {
+          // In the mosaic a tab that is not a tile takes the focused tile's place
+          const m = mosaicRef.current
+          if (m && !atLibraryRef.current && !roleIn(m, id)) {
+            placeInMosaic(roleIn(m, activeIdRef.current ?? '') ?? 'main', id)
+            return
+          }
+          goToTab(id)
+        }}
         onClose={closeTab}
         onNewTab={() => void openDialog()}
         onNewWindow={() => bridge.newWindow()}
@@ -1321,11 +1695,12 @@ export default function App(): React.JSX.Element {
         onShowInZotero={(path) => void bridge.zoteroSelect(path)}
         onTabDragFile={dragTabFile}
         onTabDragOut={(id, path) => void moveTabOut(id, path)}
-        onReorder={moveTab}
+        onPlaceTab={placeTabAt}
         onTogglePin={pinTab}
         onCloseMany={(ids) => void closeTabs(ids)}
         onMoveToNewWindow={moveToNewWindow}
         onReload={(id, path) => void reloadTab(id, path)}
+        onDuplicate={(id) => void duplicateTab(id)}
         onOpenInSplit={(path) => {
           const host = activeIdRef.current
           if (host && !atLibraryRef.current) void openInSplit(host, path)
@@ -1339,21 +1714,35 @@ export default function App(): React.JSX.Element {
           there is no place to restore, because the viewer never stopped
           existing. Unmounting here instead would throw away scroll position,
           zoom, the split, open panels and any unsaved draft. */}
-      <div className="tab-views">
+      <div className={`tab-views${mosaic && !atLibrary ? ' mosaic' : ''}`}>
         {tabs.map((tab) => {
-          const showing = tab.id === activeId && !atLibrary
+          // In the mosaic, its three tiles show at once (the focused one is
+          // the active tab); otherwise the active tab alone
+          const role = atLibrary ? null : roleIn(mosaic, tab.id)
+          const showing = role ? true : !mosaic && tab.id === activeId && !atLibrary
+          const tile = role
+            ? ` tile-${role}${tab.id === activeId ? ' focused' : ''}${tileWidthClass(role)}`
+            : ''
           // A restored tab not shown yet has no document to mount; shown, it
           // is the empty page ground for the moment its file takes to read
           if (tab.lazy) {
             return (
               <div
                 key={`${tab.id}:${tab.epoch}`}
-                className={`tab-view tab-pending${showing ? ' active' : ''}`}
+                className={`tab-view tab-pending${showing ? ' active' : ''}${tile}`}
               />
             )
           }
           return (
-            <div key={`${tab.id}:${tab.epoch}`} className={`tab-view${showing ? ' active' : ''}`}>
+            <div
+              key={`${tab.id}:${tab.epoch}`}
+              className={`tab-view${showing ? ' active' : ''}${tile}`}
+              // A touch or click in another tile makes it the focused one —
+              // before the gesture reaches the viewer, so it lands there
+              onPointerDownCapture={
+                role ? () => activeIdRef.current !== tab.id && setActiveId(tab.id) : undefined
+              }
+            >
               {tab.staleOnDisk && (
                 <div className="disk-change-bar" role="status">
                   <span>{t('app.changedOnDisk', { name: tab.payload.name })}</span>
@@ -1375,13 +1764,14 @@ export default function App(): React.JSX.Element {
               <PdfViewer
                 payload={tab.payload}
                 initialPosition={tab.initialPosition}
-                active={showing}
+                active={tab.id === activeId && !atLibrary}
                 settings={settings}
                 resolvedTheme={resolvedTheme}
                 onSettingsChange={updateSettings}
                 onPresentationChange={setPresenting}
                 onChromeVisible={setChromeVisible}
                 onDirtyChange={(dirty) => setTabDirty(tab.id, dirty)}
+                draftOnScreen={tab.draftOnScreen === true}
                 onSavedAs={(path) => void adoptSavedCopy(tab.id, path)}
                 onExternalSaveConflict={handleSaveExternalConflict}
                 onClose={() => closeTab(tab.id)}
@@ -1395,15 +1785,37 @@ export default function App(): React.JSX.Element {
                 // This tab's own document included: picking it puts the
                 // document in both columns (the same-file split)
                 splitCandidates={
-                  isElectron
+                  hasAppTabs
                     ? tabs.map((o) => ({ name: o.payload.name, path: o.payload.path }))
                     : undefined
                 }
-                onRequestOpenOtherInSplit={isElectron ? () => void openOtherInSplit(tab.id) : undefined}
+                onRequestOpenOtherInSplit={hasAppTabs ? () => void openOtherInSplit(tab.id) : undefined}
+                mosaic={
+                  hasAppTabs
+                    ? {
+                        open: !!roleIn(mosaic, tab.id),
+                        canOpen: tabs.length >= 3,
+                        onToggle: () => toggleMosaic(tab.id)
+                      }
+                    : undefined
+                }
+                onOpenPath={openPath}
+                onOpeningFromHere={() => {
+                  openerRef.current = { tabId: tab.id, at: Date.now() }
+                }}
               />
             </div>
           )
         })}
+        {mosaic && tabDragging && !atLibrary && (
+          <MosaicDrop
+            onDrop={(role, path) => {
+              setTabDragging(false)
+              const dropped = tabsRef.current.find((x) => x.payload.path === path)
+              if (dropped) placeInMosaic(role, dropped.id)
+            }}
+          />
+        )}
         {/* With nothing open the library is not a choice, it is all there is */}
         {(atLibrary || tabs.length === 0) && (
           <div className="tab-view active">
@@ -1420,7 +1832,7 @@ export default function App(): React.JSX.Element {
           </div>
         )}
       </div>
-      {isElectron && update && (
+      {(isElectron || isAndroid) && update && (
         <div className="update-toast" role="status">
           <div className="update-toast-text">
             {update.phase === 'available' && (
@@ -1447,7 +1859,9 @@ export default function App(): React.JSX.Element {
                 <span>
                   {update.channel === 'brew'
                     ? t('update.manualBrewBody', { version: update.version })
-                    : t('update.manualDownloadBody', { version: update.version })}
+                    : isAndroid
+                      ? t('update.androidBody', { version: update.version })
+                      : t('update.manualDownloadBody', { version: update.version })}
                 </span>
                 {update.channel === 'brew' && <UpdateCommand command={BREW_UPGRADE_COMMAND} />}
               </>
@@ -1456,7 +1870,9 @@ export default function App(): React.JSX.Element {
           {update.phase === 'manual' && update.channel === 'download' && (
             <button
               className="btn-primary"
-              onClick={() => bridge.openExternal(RELEASES_PAGE_URL)}
+              // Android: the APK itself, which the browser downloads and
+              // Android's installer puts over this one (android-api.ts)
+              onClick={() => (isAndroid ? bridge.updateDownload() : bridge.openExternal(RELEASES_PAGE_URL))}
             >
               {t('update.manualOpen')}
             </button>

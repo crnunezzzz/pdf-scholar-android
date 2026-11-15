@@ -2,6 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { OPS } from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { detectDoi } from '../doi-detect'
+import { buildDocNotes, copyForAiMarkdown, metadataTitle } from '../doc-notes'
+import { excludedBy, sharesWithAny } from '../../../shared/mcp'
+import { openAiTools } from './AiToolsDialog'
 import { isPasswordException, openDocument } from '../pdf-doc'
 import type { DocResources } from '../pdf-doc'
 import { renderPagesAsImages as renderAiPageImages } from '../ai-page-images'
@@ -21,12 +24,14 @@ import type {
   ThemeName,
   ViewRotation
 } from '../../../shared/types'
-import { bridge, isElectron, isExtension } from '../bridge'
+import { bridge, isAndroid, isElectron, isExtension, writesInPlace } from '../bridge'
+import { CONVERSATION_HANDOFF_EVENT, pendingConversationFor } from '../chat-store'
 import { isSharedWith, markSharedWith } from '../ai-sharing'
 import { useDropTarget } from './useDropTarget'
 import { useDocumentDrag } from './useDocumentDrag'
 import { prettyModelName } from './ai-models'
-import { bubblesWhileTyping, commandForEvent, isKeyboardCaptured, shortcutLabel } from '../keymap'
+import { commandForEvent, isKeyboardCaptured, shortcutLabel } from '../keymap'
+import type { CommandId } from '../keymap'
 import { READ_ALOUD } from '../flags'
 import {
   FREETEXT_SIZE,
@@ -38,6 +43,7 @@ import {
   annotationAtPoint,
   annotationHitTest,
   clearCustomColors,
+  freetextAnchor,
   freetextMinSize,
   inkHitTest,
   inkPad,
@@ -47,11 +53,9 @@ import {
   lineQuad,
   nextAnnotationId,
   quadsUnion,
-  rgbCss,
   selectionRectsForPage,
   strokesBox,
-  TEXT_FONT_DEFAULT,
-  textFontCss
+  TEXT_FONT_DEFAULT
 } from '../annotations'
 import {
   clearToolPrefs,
@@ -83,6 +87,7 @@ import {
   flipTarget,
   GESTURE_SETTLE,
   MARGIN_NOTES_W,
+  midGestureZoomIn,
   PAD_BOTTOM,
   PAD_TOP,
   PAGE_GAP,
@@ -99,6 +104,7 @@ import {
 } from '../rotation'
 import type { RowLayout } from '../rotation'
 import { createPagedWheel, holdSnap, PageSlots, releaseSnap } from '../paged-view'
+import { isZoomWheel } from '../platform'
 import AiPanel, { AiQuickPopover } from './AiPanel'
 import type { AiQuickState, AiSeed, EnsuredDocument } from './AiPanel'
 import {
@@ -110,11 +116,18 @@ import {
 import { buildMarginCopy } from '../../../shared/margin-export'
 import type { MarginExportCard } from '../../../shared/margin-export'
 import { WASM_SAFE_LIMIT } from '../../../shared/pdfium-annot-ops'
-import { marginCardAnnotations, MarginJumpArrows } from './MarginNotes'
+import {
+  marginCardAnnotations,
+  MarginJumpArrows,
+  marginStackBottom,
+  resetMarginStacks,
+  useMarginColumnBottom
+} from './MarginNotes'
 import type { MarginViewConfig } from './MarginNotes'
 import { registerPdfiumDoc, releasePdfiumDoc } from '../pdfium-renderer'
 import {
   buildAiDocument,
+  chatLanguageRule,
   chatSystem,
   citationPage,
   excerptSystemNote,
@@ -126,6 +139,7 @@ import {
 import type { AiDocument, ResolvedCitation } from '../ai'
 import { charCitationsToQuotes } from '../ai-retrieval'
 import { rememberRequestTokenLimit } from '../ai-token-limits'
+import AnnotHoverCard from './AnnotHoverCard'
 import AnnotPopover from './AnnotPopover'
 import LinkPreview from './LinkPreview'
 import AbstractBubble from './AbstractBubble'
@@ -157,11 +171,15 @@ import {
 import type { SavedSignature } from '../signatures'
 import { IconPanelLeft, IconPanelRight, IconPause, IconPlay, IconStop } from './icons'
 import { OverlayScrollbars } from './OverlayScrollbars'
+import FreeTextEditor from './FreeTextEditor'
 import PdfPage from './PdfPage'
 import PresentationMode from './PresentationMode'
 import Sidebar from './Sidebar'
 import SearchBar from './SearchBar'
 import Toolbar from './Toolbar'
+import type { MosaicControl } from './Toolbar'
+import SplitPicker from './SplitPicker'
+import { copyableLink } from '../../../shared/link-target'
 import { NotePopover, SelectionMenu } from './SelectionMenu'
 import { inTextField } from './TextContextMenu'
 import type { MenuAction, MenuState } from './SelectionMenu'
@@ -179,6 +197,8 @@ import {
   buildPageTexts,
   findMatches,
   hasExtractableText,
+  IMAGE_SPANS_READY_SELECTOR,
+  inImageWords,
   resolveAllMatchRects,
   resolveMatchRects,
   TEXT_SPANS_READY_SELECTOR
@@ -187,7 +207,10 @@ import { addSearchHistory, clearSearchHistory } from '../search-history'
 import { saveSearchListOpen } from '../search-list-pref'
 import { isPageInverted } from '../theme-tune'
 import { clearAiTextScale } from '../ai-text-scale'
+import { applyReadingFont, clearReadingFont } from '../reading-font'
 import type { PageText, SearchMatch, SearchOptions } from '../search'
+import { allowOcrStore, carryOcr, enableOcr, setOcrAuto, useOcrAllowed, useOcrOffer, useOcrProgress } from '../ocr'
+import { OcrBadge } from './OcrBadge'
 import { offsetAtPoint, rangeOfQuads, snapToWords } from '../text-range'
 import type { CharRange } from '../text-range'
 import { collectExportRows, computeExcerpts, toDocx, toHtml, toMarkdown, toPlainText } from '../annot-export'
@@ -196,6 +219,7 @@ import { clamp } from '../clamp'
 import { useReadAloud } from '../hooks/useReadAloud'
 import { PANEL_DEFAULTS, PANEL_LS_KEY, usePanelWidths } from '../hooks/usePanelWidths'
 import { useUndoStack } from '../hooks/useUndoStack'
+import { useDevicePixelRatio } from '../hooks/useDevicePixelRatio'
 import { DEFAULT_SETTINGS } from '../../../shared/defaults'
 
 // openDocument/isPasswordException live in pdf-doc.ts, shared with the
@@ -317,6 +341,9 @@ export interface AnnotPatch {
    *  sent with re-measured `quads` — a wider face needs a wider box, and the
    *  measurement (freetextMinSize) is a canvas that only exists here. */
   font?: PdfStandardFont
+  /** freetext: re-set an existing box at another size in points (issue #53).
+   *  Sent with re-measured `quads` like `font`. */
+  fontSize?: number
   /** Note drag: replacement quads (engine gets quads[0] as the new rect) */
   quads?: PageRect[]
   /** Drag-move of an ink/line/arrow: replacement strokes.
@@ -401,6 +428,10 @@ interface Props {
   onChromeVisible(visible: boolean): void
   /** Unsaved-changes state (save model) — App needs it for close prompts */
   onDirtyChange(dirty: boolean): void
+  /** The path's draft was already on screen in this window when this viewer
+   *  opened — a duplicated tab (issue #53). Its marks load as always, but
+   *  without the «recovered from the previous session» word: nothing was. */
+  draftOnScreen?: boolean
   /** «Save a copy» wrote the current document (edits included) to `path` —
    *  App switches this tab over to the copy so work continues there */
   onSavedAs(path: string): void
@@ -423,6 +454,14 @@ interface Props {
    *  current file's path and this action. Desktop leaves it undefined — the tab
    *  bar already carries the file identity. */
   onOpenFile?(): void
+  /** Open a document by path, as a tab of the host's (App's openPath). For a
+   *  conversation picked from the assistant's cross-document history (issue
+   *  #46). Undefined where there is no tab strip to open it in — the
+   *  document then opens in a new window or tab. */
+  onOpenPath?(path: string): Promise<void> | void
+  /** This document is about to open another as a tab of its own (a PDF
+   *  attachment), so the host can put that tab in this tab's group */
+  onOpeningFromHere?(): void
   /** A DIFFERENT file for the second split column (App-owned; «Åpne i delt
    *  visning»). null/undefined = the split shows this document, as always.
    *  All five are optional so single-document hosts (the extension) need not
@@ -448,6 +487,8 @@ interface Props {
   /** Desktop: the open documents, listed under «Åpne i delt visning» in
    *  the view menu */
   splitCandidates?: { name: string; path: string }[] | undefined
+  /** App's three-document mosaic, offered in the view menu */
+  mosaic?: MosaicControl | undefined
   /** «Annen fil …» in that menu — App shows the picker and opens the pick in the split */
   onRequestOpenOtherInSplit?: (() => void) | undefined
 }
@@ -501,6 +542,24 @@ async function printViaHiddenFrame(url: string): Promise<boolean> {
   }
 }
 
+/** How long a tucked toolbar stays up after a shortcut armed a mode — long
+ *  enough to see which tool lit up, short enough that it never feels like the
+ *  toolbar came back. The HUD's own idle fade is 2.6 s; this sits with it. */
+const KEY_PEEK_MS = 2500
+
+/** The shortcuts that put the reader in a MODE rather than doing something at
+ *  once (issue #61; the rule is Emil's, 2026-10-25): a tool armed and waiting
+ *  for a stroke, the hand, the page field waiting for digits. With the
+ *  toolbar tucked, one of these used to land in silence — Ctrl+G focused a
+ *  field nobody could see, a tool key lit a button nobody could see. What
+ *  acts on the keypress itself (zoom, rotate, spread, split, hiding the
+ *  annotations) is its own feedback and stays out, and so does what opens a
+ *  surface of its own (the search bar, the panels, presentation). The tool
+ *  keys are matched by prefix below; nav.gotoPage is not here because the
+ *  toolbar's own listener swallows it before this handler — it reports
+ *  through onPageFieldShortcut instead. */
+const ARMS_A_MODE: ReadonlySet<CommandId> = new Set<CommandId>(['nav.hand'])
+
 export default function PdfViewer({
   payload,
   initialPosition,
@@ -511,11 +570,14 @@ export default function PdfViewer({
   onPresentationChange,
   onChromeVisible,
   onDirtyChange,
+  draftOnScreen = false,
   onSavedAs,
   onExternalSaveConflict,
   onClose,
   onLeaveDocument,
   onOpenFile,
+  onOpenPath,
+  onOpeningFromHere,
   splitDoc,
   onSplitDirtyChange,
   onRequestCloseSplitDoc,
@@ -523,6 +585,7 @@ export default function PdfViewer({
   onRequestOpenInSplit,
   sameSplitNonce,
   splitCandidates,
+  mosaic,
   onRequestOpenOtherInSplit
 }: Props): React.JSX.Element {
   useLang()
@@ -596,7 +659,7 @@ export default function PdfViewer({
   const [error, setError] = useState<string | null>(null)
   /** Edge-style toolbar auto-hide. Pinned (default) = always visible; unpinned
    *  = tucks away and reveals on top-edge hover. Persisted across sessions. */
-  const [toolbarPinned, setToolbarPinned] = useState(loadToolbarPinned)
+  const [toolbarPinnedPref, setToolbarPinned] = useState(loadToolbarPinned)
   const [toolbarPeek, setToolbarPeek] = useState(false)
   /** Margin view: notes + annotation comments as always-visible cards in a
    *  column beside each page (both panes). The gutter it needs is reserved
@@ -671,6 +734,16 @@ export default function PdfViewer({
   const fitModeRef = useRef(fitMode)
   fitModeRef.current = fitMode
   const [fullscreen, setFullscreen] = useState(false)
+  /** The toolbar as it shows now. On Android, fullscreen is the phone's
+   *  reading mode — the page and nothing else — so the toolbar tucks away
+   *  like an unpinned one (a swipe down from the top brings it back) while
+   *  the reader's own pin choice waits for fullscreen to end. The desktop
+   *  keeps the two independent. */
+  const toolbarPinned = toolbarPinnedPref && !(isAndroid && fullscreen)
+  const fullscreenRef = useRef(fullscreen)
+  fullscreenRef.current = fullscreen
+  /** Set where toggleFullscreen is defined (below togglePin, which calls it) */
+  const toggleFullscreenRef = useRef<() => void>(() => {})
   const [toast, setToast] = useState<string | null>(null)
   const [menu, setMenu] = useState<MenuState | null>(null)
   /** «Sammendrag» chosen in the selection menu: the selected reference's text
@@ -1105,6 +1178,25 @@ export default function PdfViewer({
   }, [rememberPaneB, openSameFileSplit, requestSplitDoc])
   toggleSplitRef.current = toggleSplit
 
+  /** The split-view BUTTON (the toolbar's, and its row in «…»): where the
+   *  host can put another document in the second column, opening the split
+   *  first asks WHICH (SplitPicker over the right half) — this document, an
+   *  open tab, or another file. Closing, and the 's' key, stay toggleSplit. */
+  const [splitPicking, setSplitPicking] = useState(false)
+  const canPickSplit = !!(onRequestOpenInSplit && onRequestOpenOtherInSplit && splitCandidates)
+  const splitButton = useCallback(() => {
+    if (!splitOpenRef.current && !foreignRef.current && canPickSplit) {
+      setSplitPicking((open) => !open)
+      return
+    }
+    setSplitPicking(false)
+    toggleSplit()
+  }, [canPickSplit, toggleSplit])
+  // However the column came to open (the picker, a drop, 's'), the question is answered
+  useEffect(() => {
+    if (splitOpen) setSplitPicking(false)
+  }, [splitOpen])
+
   /** A document dropped on a column — a tab from the strip or a PDF from the
    *  OS — lands WHERE it was dropped (Emil, 2026-09-03: not always on the
    *  right): the column it hit, or with one column the half of it. Pane A is
@@ -1338,6 +1430,9 @@ export default function PdfViewer({
   const setEraserScope = useCallback((eraserScope: EraserScope) => {
     setPrefs((p) => ({ ...p, eraserScope }))
   }, [])
+  const setSpaceHand = useCallback((spaceHand: boolean) => {
+    setPrefs((p) => ({ ...p, input: { ...p.input, spaceHand } }))
+  }, [])
   const setFingerDraws = useCallback((fingerDraws: boolean) => {
     setPrefs((p) => ({ ...p, input: { ...p.input, fingerDraws } }))
   }, [])
@@ -1386,18 +1481,20 @@ export default function PdfViewer({
   const resetTextPref = useCallback(() => {
     setPrefs((p) => ({ ...p, text: { ...DEFAULT_TOOL_PREFS.text } }))
   }, [])
-  /** The floating text-box editor. Carries its own box size (page points) so it
-   *  is drag-resizable before commit; `editingId` is set when re-opening an
-   *  existing FreeText annotation (double-click) so commit resizes/edits it in
-   *  place rather than creating a new one. */
+  /** The floating text-box editor (FreeTextEditor). Where it starts, in page
+   *  points; it sizes, grows and moves itself from there and hands the box
+   *  back on commit. `w`/`h` are set for a re-opened box only — a new one
+   *  grows with its text until the reader sizes it (issue #66). `editingId`
+   *  is set when re-opening an existing FreeText annotation (double-click) so
+   *  commit resizes/edits it in place rather than creating a new one. */
   const [freeTextDraft, setFreeTextDraft] = useState<{
     pageNumber: number
     x: number
     y: number
     clientX: number
     clientY: number
-    w: number
-    h: number
+    w?: number
+    h?: number
     editingId?: string
     text?: string
     /** Set when editing an existing box, so the editor shows ITS colour/size
@@ -1432,6 +1529,34 @@ export default function PdfViewer({
   }, [activeTool, toolPrefs, prefs.text])
   const drawToolRef = useRef(drawTool)
   drawToolRef.current = drawTool
+  // Hand tool (issue #44): a mouse drag moves the page, as Acrobat's hand
+  // does. A mode of its own rather than a DrawToolType — it draws nothing,
+  // so a rotated or XFA document may use it and the tool fieldset's lock
+  // must not reach it. Exclusive with the marking tools: arming either
+  // side puts the other down. A finger and a trackpad pan without it.
+  const [handTool, setHandTool] = useState(false)
+  const handToolRef = useRef(handTool)
+  handToolRef.current = handTool
+  /** Space is down and it is what put the hand up (the opt-in «Space
+   *  holds the hand»): the release puts it down again. The marking tool
+   *  that was armed stays armed underneath — the hand's class makes the
+   *  page inert while it is up, so the tool is simply back on release. */
+  const spaceHeldRef = useRef(false)
+  useEffect(() => {
+    const release = (e?: KeyboardEvent): void => {
+      if (e && e.key !== ' ') return
+      if (!spaceHeldRef.current) return
+      spaceHeldRef.current = false
+      setHandTool(false)
+    }
+    const onBlur = (): void => release()
+    window.addEventListener('keyup', release)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keyup', release)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
   const [pillEditing, setPillEditing] = useState(false)
   const [pillInput, setPillInput] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -1446,6 +1571,19 @@ export default function PdfViewer({
   const [searchMatches, setSearchMatches] = useState<SearchMatch[]>([])
   const [searchIndex, setSearchIndex] = useState(-1)
   const [searchBusy, setSearchBusy] = useState(false)
+  /** Scanned pages being read by OCR (ocr.ts) — said in the search bar and
+   *  the assistant while it lasts */
+  const ocrProgress = useOcrProgress(pdf)
+  /** The scanned pages alone — what the assistant waits for */
+  const ocrScanProgress = useOcrProgress(pdf, true)
+  /** OCR on request (settings.ocrAuto off) and this document has a page with
+   *  no text: the toolbar, search bar and assistant offer «Gjenkjenn tekst» */
+  const ocrOffer = useOcrOffer(pdf)
+  const ocrAllowed = useOcrAllowed(pdf)
+  /** Bumped when OCR becomes allowed for this document mid-session (asked
+   *  for, or the setting switched on): page texts read without it are stale,
+   *  so search and the assistant read the document again */
+  const [ocrEpoch, setOcrEpoch] = useState(0)
   const [searchHits, setSearchHits] = useState<{
     pageNumber: number
     rects: PageRect[]
@@ -1494,6 +1632,21 @@ export default function PdfViewer({
   const [aiPinned, setAiPinned] = useState(false)
   const aiPinnedRef = useRef(aiPinned)
   aiPinnedRef.current = aiPinned
+  // A conversation picked for THIS document from a panel's cross-document
+  // history (issue #46): open the assistant on it. Looked for when the viewer
+  // mounts (a new tab or window) and when a host says a handoff's document
+  // has been opened (this tab existed already); the panel takes it from there.
+  const [conversationAskId, setConversationAskId] = useState(0)
+  useEffect(() => {
+    const look = (): void => {
+      if (pendingConversationFor(payload.path) === null) return
+      setAiPinned(true)
+      setConversationAskId((n) => n + 1)
+    }
+    look()
+    window.addEventListener(CONVERSATION_HANDOFF_EVENT, look)
+    return () => window.removeEventListener(CONVERSATION_HANDOFF_EVENT, look)
+  }, [payload.path])
   // The dead-man switch (KI-tilgang), cached so menus can hide their AI entries
   // without an IPC roundtrip per open. A courtesy only — the transports enforce
   // the mode on every request regardless. Refreshed when the settings save
@@ -1693,8 +1846,42 @@ export default function PdfViewer({
     timer: number
   } | null>(null)
   const pageTextsRef = useRef<PageText[] | null>(null)
+  /** pageTextsRef holds the words in the images too — read by a search,
+   *  which waits for them. Everything else builds it without waiting
+   *  (images: 'available'), and a search then reads the document again. */
+  const pageTextsFullRef = useRef(false)
+  /** The page texts the current search matches were found in: pageTextsRef
+   *  once the whole document is read, a partial array while a scanned
+   *  document's pages are still arriving from OCR */
+  const searchTextsRef = useRef<PageText[] | null>(null)
+  /** The match the view was last taken to, so the index can follow it when
+   *  OCR adds hits on earlier pages */
+  const searchActiveRef = useRef<{ pageNumber: number; start: number } | null>(null)
   const searchOpenRef = useRef(searchOpen)
   searchOpenRef.current = searchOpen
+
+  useEffect(() => setOcrAuto(settings.ocrAuto), [settings.ocrAuto])
+  const ocrAllowedRef = useRef(ocrAllowed)
+  useEffect(() => {
+    if (ocrAllowed && !ocrAllowedRef.current) {
+      pageTextsRef.current = null
+      pageTextsFullRef.current = false
+      searchTextsRef.current = null
+      setOcrEpoch((n) => n + 1)
+    }
+    ocrAllowedRef.current = ocrAllowed
+  }, [ocrAllowed])
+  /** «Gjenkjenn tekst»: read this document now — the whole of it, since the
+   *  reader asked so that search and the assistant would have it */
+  const onEnableOcr = useCallback(() => {
+    if (!pdf) return
+    enableOcr(pdf)
+    void buildPageTexts(pdf)
+      .then((texts) => {
+        pageTextsRef.current ??= texts
+      })
+      .catch(() => {})
+  }, [pdf])
   const aiHitTimerRef = useRef<number | null>(null)
   const searchSeqRef = useRef(0)
   const gotoSeqRef = useRef(0)
@@ -1838,6 +2025,9 @@ export default function PdfViewer({
         }
       }
       if (destroyed) return
+      // What OCR reads may be kept between sessions — but a locked document's
+      // text is not left in the clear on disk (ocr-store.ts)
+      if (docPasswordRef.current === undefined) allowOcrStore(doc)
       setPdf(doc)
       const collected: PageSize[] = []
       for (let i = 1; i <= doc.numPages; i++) {
@@ -1914,6 +2104,8 @@ export default function PdfViewer({
       // Only the page this window just wrote to is re-read when one is named
       // — see reloadedAnnotations for why that is the whole reload's cost.
       const applyAnnots = await reloadedAnnotations(doc, pageNumber)
+      // The pages are the same pictures: what OCR read on them still holds
+      carryOcr((await docResourcesRef.current?.task.promise.catch(() => null)) ?? null, doc)
       const old = docResourcesRef.current
       docResourcesRef.current = resources
       setPdf(doc)
@@ -1925,6 +2117,67 @@ export default function PdfViewer({
       resources.port.terminate()
     }
   }, [payload.path])
+
+  // ---------- Notes for AI tools outside the app (shared/research-notes.ts) ----------
+  // What the reader marked here, kept where the MCP server reads it (desktop:
+  // userData/notes), written quietly once the marks settle — at open, and
+  // after every change. Nothing is read for it that the Merknader tab has not
+  // already read: the excerpts are its own. A locked document records only
+  // that it is locked, which also keeps its conversations from the server.
+  const [metaTitle, setMetaTitle] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    setMetaTitle(undefined)
+    if (!pdf) return undefined
+    let stale = false
+    void metadataTitle(pdf).then((title) => {
+      if (!stale) setMetaTitle(title)
+    })
+    return () => {
+      stale = true
+    }
+  }, [pdf])
+  const notesWrittenRef = useRef('')
+  useEffect(() => {
+    if (!isElectron || !pdf) return undefined
+    const timer = window.setTimeout(() => {
+      const record = buildDocNotes({
+        path: payload.path,
+        name: payload.name,
+        annots,
+        excerpts,
+        pages: pdf.numPages,
+        doi,
+        title: metaTitle,
+        locked: docPasswordRef.current !== undefined
+      })
+      // The same record again (a reload after this window's own write, an
+      // excerpt that came back unchanged) is not written again
+      const key = JSON.stringify({ ...record, updatedAt: 0 })
+      if (key === notesWrittenRef.current) return
+      notesWrittenRef.current = key
+      void bridge.setDocNotes(record)
+    }, 2000)
+    return () => window.clearTimeout(timer)
+  }, [pdf, annots, excerpts, doi, metaTitle, payload.path, payload.name])
+
+  // Whether THIS document is kept out of the AI tools (shared/mcp.ts) — the
+  // Merknader tab's line, whose «Endre» opens the dialog on this document.
+  // undefined = no line: not the desktop, or no tool may read, where it would
+  // only be clutter. Read again whenever the window is focused, since the
+  // dialog changes it.
+  const [aiToolsKeptOut, setAiToolsKeptOut] = useState<'doc' | 'folder' | null | undefined>(undefined)
+  const readAiPolicy = useCallback(() => {
+    void bridge.mcpPolicy().then((policy) => {
+      setAiToolsKeptOut(
+        policy && sharesWithAny(policy) ? excludedBy(payload.path, policy, !/Linux/.test(navigator.platform)) : undefined
+      )
+    })
+  }, [payload.path])
+  useEffect(() => {
+    readAiPolicy()
+    window.addEventListener('focus', readAiPolicy)
+    return () => window.removeEventListener('focus', readAiPolicy)
+  }, [readAiPolicy])
 
   // Track container width (for fit-width zoom and horizontal layout).
   // Fall back to the window width so layout never deadlocks if the element
@@ -2052,6 +2305,9 @@ export default function PdfViewer({
   const pagedRef = useRef(paged)
   pagedRef.current = paged
 
+  // Every page box on whole device pixels (issue #53): the layout re-runs
+  // when the window lands on a monitor of another scale
+  const devicePixelRatio = useDevicePixelRatio()
   const layout = useMemo(() => {
     if (sizes.length === 0 || scale <= 0 || containerWidth === 0) return null
     const lay = buildRows(
@@ -2066,14 +2322,20 @@ export default function PdfViewer({
         padBottom: PAD_BOTTOM,
         sidePad: SIDE_PAD,
         spreadGap: SPREAD_GAP,
+        devicePixelRatio,
         ...(pagedHeight > 0 ? { pagedHeight } : {})
       },
       coverPage
     )
+    // The margin strips' overhangs are in the old layout's coordinates: forget
+    // them here, before the pages lay out again and report fresh ones.
+    resetMarginStacks(innerRef.current)
     // A left-hand margin means the gutter sits BEFORE the pages: shift every
     // page right by the reserved width so the column has its space.
-    return shiftLayoutX(lay, marginView.side === 'left' ? marginGutter : 0)
-  }, [sizes, scale, containerWidth, rotation, spread, coverPage, marginGutter, marginView.side, pagedHeight])
+    return shiftLayoutX(lay, marginView.side === 'left' ? marginGutter : 0, devicePixelRatio)
+  }, [sizes, scale, containerWidth, rotation, spread, coverPage, marginGutter, marginView.side, pagedHeight, devicePixelRatio])
+  // A page whose comments run on below it: the scroll height reaches them
+  const marginColumnBottom = useMarginColumnBottom(innerRef, payload.path, marginNotes)
   const layoutRef = useRef(layout)
   layoutRef.current = layout
 
@@ -2101,14 +2363,17 @@ export default function PdfViewer({
     let to = 1
     for (let i = 0; i < layout.tops.length; i++) {
       const pageTop = layout.tops[i]
-      const pageBottom = pageTop + layout.heights[i]
+      // A page whose margin comments run on below it stays mounted while
+      // they are near — the cards are in ITS tree, they vanish with it
+      const stackBottom = marginNotes ? marginStackBottom(innerRef.current, payload.path, i + 1) : null
+      const pageBottom = Math.max(pageTop + layout.heights[i], stackBottom ?? 0)
       if (pageBottom < top) from = i + 2
       if (pageTop <= bottom) to = i + 1
     }
     setRange((prev) => (prev[0] === from && prev[1] === to ? prev : [from, Math.max(from, to)]))
     const current = computeCurrent()
     if (current) setCurrentPage(current.page)
-  }, [layout, computeCurrent])
+  }, [layout, computeCurrent, marginNotes, payload.path])
   const updateRangeRef = useRef(updateRange)
   updateRangeRef.current = updateRange
 
@@ -2294,14 +2559,36 @@ export default function PdfViewer({
   // above the viewer's top edge, hovering it — or just shoving the pointer to
   // the very top of the screen — reveals the toolbar. Retract stays with the
   // toolbar-wrap's onMouseLeave so open dropdowns are never yanked away.
+  // A finger never hovers: after a tap Chromium sends compatibility mouse
+  // events at the tap's point — and, when the tap changed the layout under
+  // it, mouse-type pointerover/enter boundary events too. Tapping the unpin or
+  // fullscreen button sat exactly where the reveal strip appears, so the
+  // toolbar came back the instant it tucked, for good. Anything mouse-like
+  // within a beat of a touch is that echo, not a hover; a finger has the
+  // swipe down from the top (the touch effect below).
+  const lastTouchRef = useRef(0)
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') lastTouchRef.current = performance.now()
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('pointerup', onDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointerup', onDown, true)
+    }
+  }, [])
+  const isHover = (e: PointerEvent | React.PointerEvent): boolean =>
+    e.pointerType !== 'touch' && performance.now() - lastTouchRef.current > 1000
   useEffect(() => {
     if (!active || !immersive) return
-    const onMove = (e: MouseEvent): void => {
+    const onMove = (e: PointerEvent): void => {
+      if (!isHover(e)) return
       const top = viewerRootRef.current?.getBoundingClientRect().top ?? 0
       if (e.clientY <= top + 14) setToolbarPeek(true)
     }
-    window.addEventListener('mousemove', onMove)
-    return () => window.removeEventListener('mousemove', onMove)
+    window.addEventListener('pointermove', onMove)
+    return () => window.removeEventListener('pointermove', onMove)
   }, [active, immersive])
 
   // Edge-rail handles fade in when the pointer nears a side edge. This is a
@@ -2613,14 +2900,15 @@ export default function PdfViewer({
   const commitGestureRef = useRef(commitGesture)
   commitGestureRef.current = commitGesture
 
-  // Ctrl+wheel (and trackpad pinch, which Chromium reports as ctrl+wheel):
+  // Ctrl+wheel (and trackpad pinch, which Chromium reports as ctrl+wheel;
+  // Cmd+wheel on macOS too — see isZoomWheel):
   // accumulate into a CSS transform for 60 fps feedback, re-render on settle.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const pagedWheel = createPagedWheel()
     const onWheel = (e: WheelEvent): void => {
-      if (!e.ctrlKey) {
+      if (!isZoomWheel(e)) {
         // Paged: the wheel turns pages (see createPagedWheel)
         const lay = layoutRef.current
         if (pagedRef.current && lay) pagedWheel(e, el, lay)
@@ -2667,7 +2955,7 @@ export default function PdfViewer({
       // Long pinches blur (CSS-scaled canvas): re-render mid-gesture once the
       // factor drifts far enough; the anchored commit makes this seamless and
       // the next wheel event just starts a fresh gesture segment.
-      if (g.factor > 1.3 || g.factor < 1 / 1.3) {
+      if (g.factor > midGestureZoomIn(window.devicePixelRatio || 1) || g.factor < 1 / 1.3) {
         commitGestureRef.current(false)
       } else {
         g.timer = window.setTimeout(() => commitGestureRef.current(), GESTURE_SETTLE)
@@ -2698,10 +2986,41 @@ export default function PdfViewer({
     touchToolbarTimerRef.current = window.setTimeout(() => setToolbarPeek(false), 6000)
   }, [])
 
+  /** A shortcut that arms a mode (ARMS_A_MODE, the tool keys, Ctrl+G) peeks
+   *  a tucked toolbar for a beat, the way a tap on the top strip does, so
+   *  the mode is seen to be on (issue #61). It
+   *  stays as long as the reader is IN it — the caret in the page or zoom
+   *  field, the pointer resting on it — and tucks a beat after. Only a field
+   *  holds it, not a button: a button clicked earlier keeps focus after the
+   *  toolbar has tucked under a mouseleave, and would pin it for good. */
+  const keyToolbarTimerRef = useRef<number | null>(null)
+  const toolbarWrapRef = useRef<HTMLDivElement>(null)
+  const revealToolbarKey = useCallback(() => {
+    if (!immersiveRef.current) return
+    setToolbarPeek(true)
+    const arm = (): void => {
+      if (keyToolbarTimerRef.current) window.clearTimeout(keyToolbarTimerRef.current)
+      keyToolbarTimerRef.current = window.setTimeout(() => {
+        const wrap = toolbarWrapRef.current
+        const focus = document.activeElement
+        const inUse =
+          !!wrap &&
+          ((focus instanceof HTMLInputElement && wrap.contains(focus)) || wrap.matches(':hover'))
+        if (inUse) arm()
+        else setToolbarPeek(false)
+      }, KEY_PEEK_MS)
+    }
+    arm()
+  }, [])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el || !active) return
     const EDGE = 24
+    // Android fullscreen: the outermost pixels of the top edge belong to the
+    // system (a swipe there shows the status bar), so the band that reveals
+    // the toolbar reaches further down
+    const EDGE_TOP = isAndroid ? 48 : EDGE
     const pinch = { active: false, startDist: 0 }
     const swipe = { edge: null as 'left' | 'right' | 'top' | null, x: 0, y: 0, done: false }
 
@@ -2737,7 +3056,7 @@ export default function PdfViewer({
       if (e.touches.length >= 2) {
         // Two fingers = pinch. preventDefault stops native panning/zooming so
         // we keep receiving moves; a stray swipe/drag in progress is dropped.
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         swipe.edge = null
         annotDragRef.current = null
         if (!pinch.active) beginPinchSegment(e.touches)
@@ -2753,7 +3072,7 @@ export default function PdfViewer({
           const [hx, hy] = pagePointFromClientRef.current(t.clientX, t.clientY, pageEl)
           const hit = annotationHitTest(annotsRef.current.get(pageNumber) ?? [], hx, hy)
           if (hit && isMovableAnnotation(hit) && hit.quads[0]) {
-            e.preventDefault()
+            if (e.cancelable) e.preventDefault()
             annotDragRef.current = {
               pageNumber,
               record: hit,
@@ -2774,7 +3093,7 @@ export default function PdfViewer({
       const fromLeft = t.clientX - rect.left
       const fromRight = rect.right - t.clientX
       const fromTop = t.clientY - rect.top
-      if (immersiveRef.current && !toolbarPinned && fromTop <= EDGE) {
+      if (immersiveRef.current && !toolbarPinned && fromTop <= EDGE_TOP) {
         swipe.edge = 'top'
       } else if (fromLeft <= EDGE) {
         swipe.edge = 'left'
@@ -2784,7 +3103,7 @@ export default function PdfViewer({
         swipe.edge = null
         return
       }
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       swipe.x = t.clientX
       swipe.y = t.clientY
       swipe.done = false
@@ -2792,7 +3111,7 @@ export default function PdfViewer({
 
     const onTouchMove = (e: TouchEvent): void => {
       if (pinch.active && e.touches.length >= 2) {
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         const g = gestureRef.current
         const inner = innerRef.current
         if (!g || !inner) return
@@ -2811,9 +3130,9 @@ export default function PdfViewer({
         }
         return
       }
-      if (annotDragRef.current) e.preventDefault() // pointermove drives the ghost
+      if (annotDragRef.current && e.cancelable) e.preventDefault() // pointermove drives the ghost
       if (swipe.edge && !swipe.done && e.touches.length === 1) {
-        e.preventDefault()
+        if (e.cancelable) e.preventDefault()
         const t = e.touches[0]
         const dx = t.clientX - swipe.x
         const dy = t.clientY - swipe.y
@@ -3008,6 +3327,7 @@ export default function PdfViewer({
       }
       setActiveTool(tool)
       if (tool) setMarkupTool(null) // freehand and text-markup tools are exclusive
+      if (tool) setHandTool(false)
     },
     [showToast, xfaOf]
   )
@@ -3021,10 +3341,22 @@ export default function PdfViewer({
         return
       }
       if (type) setActiveTool(null)
+      if (type) setHandTool(false)
       setMarkupTool(type)
     },
     [showToast, xfaOf]
   )
+
+  /** Arm/disarm the hand tool. Arming it puts every marking tool down, so
+   *  a press on the page can mean one thing. */
+  const toggleHandTool = useCallback(() => {
+    const on = !handToolRef.current
+    setHandTool(on)
+    if (on) {
+      setActiveTool(null)
+      setMarkupTool(null)
+    }
+  }, [])
 
   /** The note tool's arm/disarm, and the snip tool's — the same read-only
    *  refusal as the other tools, said in words rather than by a dead button. */
@@ -3099,7 +3431,7 @@ export default function PdfViewer({
     void bridge.docIsDirty(payload.path).then((isDirty) => {
       if (stale || !isDirty) return
       setDirty(true)
-      showToast(t('viewer.recovered'))
+      if (!draftOnScreen) showToast(t('viewer.recovered'))
     })
     return () => {
       stale = true
@@ -3304,7 +3636,10 @@ export default function PdfViewer({
       settingsRef.current.annotAuthor.trim() || undefined,
       // The bytes above are the CURRENT document — still encrypted, because both
       // the draft and the engine's own rewrite keep the encryption.
-      docPasswordRef.current
+      docPasswordRef.current,
+      // A card printed on another page than its anchor's (the page's comments
+      // were taller than the page) says so, in the reader's language.
+      (page, how) => t(how === 'cut' ? 'margin.exportContinued' : 'margin.exportMoved', { page })
     )
     if (!(out instanceof Uint8Array)) {
       showToast(t('viewer.saveFailed', { error: errorText(out) }))
@@ -3544,6 +3879,7 @@ export default function PdfViewer({
           color: patch.color,
           contents: patch.contents,
           font: patch.font,
+          fontSize: patch.fontSize,
           rect: markup ? undefined : reshapeQuads?.[0],
           quads: markup ? reshapeQuads : undefined,
           strokes: reshapeStrokes,
@@ -3558,7 +3894,15 @@ export default function PdfViewer({
         ctx.markDirty()
         ctx.emitChanged()
         // 'file' annots are painted by pdf.js from the file — refresh the canvas
-        if (wasFilePainted && (patch.color || patch.quads || patch.strokes || patch.translate)) {
+        if (
+          wasFilePainted &&
+          (patch.color ||
+            patch.quads ||
+            patch.strokes ||
+            patch.translate ||
+            patch.font !== undefined ||
+            patch.fontSize !== undefined)
+        ) {
           void ctx.reload(handle.pageNumber)
         }
       }
@@ -3716,6 +4060,7 @@ export default function PdfViewer({
       // buildAnnotation uses — otherwise undoing a font change on such a box
       // would omit the key and leave the new face in place.
       if (patch.font !== undefined) before.font = record.font ?? TEXT_FONT_DEFAULT
+      if (patch.fontSize !== undefined) before.fontSize = record.fontSize ?? FREETEXT_SIZE
       if (patch.quads) before.quads = record.quads
       if (patch.strokes) before.strokes = record.strokes
       if (patch.translate) before.translate = { dx: -patch.translate.dx, dy: -patch.translate.dy }
@@ -3852,6 +4197,12 @@ export default function PdfViewer({
     [persistAnnotation]
   )
 
+  /** The popover's clear-of rect for a mark — declared further down (it needs
+   *  the page elements); reached from the click handlers above it by ref */
+  const annotAvoidRectRef = useRef<
+    (pageNumber: number, record: PageAnnotation) => { top: number; bottom: number; left: number } | null
+  >(() => null)
+
   /** Re-open an existing FreeText box in the editor (double-click) so its text
    *  and box size can be changed after insertion; commit updates it in place. */
   const openFreeTextEditor = useCallback((pageNumber: number, record: PageAnnotation) => {
@@ -3889,41 +4240,55 @@ export default function PdfViewer({
       }
       // Clicking an existing text box with the tool armed edits that box —
       // stacking a fresh draft on top of it is never what the user meant.
+      // Its style menu opens beside it too (issue #53: with the tool armed the
+      // menu was unreachable — only a click with NO tool raised it): colour,
+      // face, size and delete apply to this box. A click in the menu commits
+      // the editor's text first (its blur), then restyles the committed box.
+      const doc = docOf(activePaneRef.current)
       const existing = annotationHitTest(
-        (docCtxFor(docOf(activePaneRef.current))?.annotsOf(pageNumber) ?? []).filter(
-          (a) => a.type === 'freetext'
-        ),
+        (docCtxFor(doc)?.annotsOf(pageNumber) ?? []).filter((a) => a.type === 'freetext'),
         x,
         y
       )
       if (existing) {
         openFreeTextEditor(pageNumber, existing)
+        setAnnotPopover({
+          x: clientX,
+          y: clientY,
+          // Through a ref: the measurer is declared further down, and this
+          // runs on a click, long after both exist
+          avoid: annotAvoidRectRef.current(pageNumber, existing),
+          pageNumber,
+          localId: existing.id,
+          doc
+        })
         return
       }
+      // The text starts at the click and its first line is centred on it
+      // (issue #66) — the click is no longer the box's top-left corner
+      const pref = prefsRef.current.text
+      const at = freetextAnchor(x, y, pref.fontSize, pref.font)
       setFreeTextDraft({
         pageNumber,
-        x,
-        y,
+        x: at.x,
+        y: at.y,
         clientX,
         clientY,
-        w: 200,
-        h: 48,
         pane: activePaneRef.current
       })
     },
     [openFreeTextEditor, docCtxFor, docOf]
   )
 
-  // Commit the editor. `wPt`/`hPt` are the editor's drag-resized box in page
-  // points; editing an existing box resizes/edits it in place, otherwise a new
-  // FreeText is created at the drawn box size.
+  // Commit the editor with the box it hands back (page points); editing an
+  // existing box resizes/edits it in place, otherwise a new FreeText is
+  // created at that box.
   const saveFreeText = useCallback(
-    async (text: string, wPt?: number, hPt?: number) => {
+    async (text: string, box: PageRect) => {
       if (!freeTextDraft) return
-      const wDrag = wPt && wPt > 24 ? wPt : freeTextDraft.w
-      const hDrag = hPt && hPt > 14 ? hPt : freeTextDraft.h
-      // The editor can be drag-shrunk below its own text — commit a box that
-      // shows every letter instead (same floor the resize handles enforce)
+      // The editor sizes itself to its text, but the box it hands back is
+      // floored here too — never narrower than a word, never shorter than
+      // the lines (the same floor the resize handles enforce)
       const fontSize = freeTextDraft.editingId
         ? freeTextDraft.fontSize ?? FREETEXT_SIZE
         : prefsRef.current.text.fontSize
@@ -3931,10 +4296,8 @@ export default function PdfViewer({
       // the same size, so measuring every box in one font would let a
       // monospaced one commit narrower than its own words.
       const font = freeTextDraft.editingId ? freeTextDraft.font : prefsRef.current.text.font
-      const min = freetextMinSize(text, fontSize, wDrag, font)
-      const w = Math.max(wDrag, min.w)
-      const h = Math.max(hDrag, min.h)
-      const rect = { x: freeTextDraft.x, y: freeTextDraft.y, w, h }
+      const min = freetextMinSize(text, fontSize, box.w, font)
+      const rect = { x: box.x, y: box.y, w: Math.max(box.w, min.w), h: Math.max(box.h, min.h) }
       // The draft carries its pane — the document is whatever that pane shows
       const doc = docOf(freeTextDraft.pane)
       if (freeTextDraft.editingId) {
@@ -4399,6 +4762,12 @@ export default function PdfViewer({
           }
           setMenu(null)
           break
+        case 'copyLink': {
+          const link = copyableLink(menu?.linkUrl)
+          if (link) navigator.clipboard?.writeText(link.text).catch(() => {})
+          setMenu(null)
+          break
+        }
         case 'abstract': {
           // The whole selection with its line breaks (selText is trimmed to
           // 500 for the web actions) — the lookup rejoins a DOI broken at a
@@ -4711,6 +5080,7 @@ export default function PdfViewer({
     async (att: DocAttachment, docKey: string): Promise<boolean> => {
       const data = await attachmentBytes(att, docKey, 'attach.openFailed')
       if (!data) return false
+      onOpeningFromHere?.()
       const res = await bridge.openAttachment(att.name, data, docKey)
       if ('error' in res) {
         showToast(t('attach.openFailed', { error: errorText(res) }))
@@ -4718,7 +5088,7 @@ export default function PdfViewer({
       }
       return true
     },
-    [attachmentBytes, showToast]
+    [attachmentBytes, showToast, onOpeningFromHere]
   )
 
   /** «Lagre …» (desktop) / «Last ned» (browser): false on a cancelled dialog,
@@ -4974,25 +5344,42 @@ export default function PdfViewer({
    *  on top of the very handles that let you resize the thing (measured with
    *  elementFromPoint: a corner grip's topmost element was the popover's colour
    *  row). The bubble stays draggable, so this only decides where it starts. */
-  const annotAvoidRect = useCallback(
-    (pageNumber: number, record: PageAnnotation): { top: number; bottom: number; left: number } | null => {
+  /** A mark's box in viewport coordinates, read off the page element it is
+   *  drawn in — so a split column's copy of the page answers for itself */
+  const annotClientRect = useCallback(
+    (
+      pageEl: HTMLElement,
+      pageNumber: number,
+      record: PageAnnotation
+    ): { left: number; top: number; right: number; bottom: number } | null => {
       if (record.quads.length === 0) return null
-      const el = allPageElsRef.current().find((p) => Number(p.dataset.page) === pageNumber)
-      if (!el) return null
-      const size = sizesOfPageElRef.current(el)[pageNumber - 1]
+      const size = sizesOfPageElRef.current(pageEl)[pageNumber - 1]
       if (!size) return null
-      const scale = scaleOfPageElRef.current(el)
-      const v = pageRectToView(quadsUnion(record.quads), size.w, size.h, rotationOfPageElRef.current(el))
-      const r = el.getBoundingClientRect()
-      const PAD = 16 // the handles sit ~10 px outside the frame
+      const scale = scaleOfPageElRef.current(pageEl)
+      const v = pageRectToView(quadsUnion(record.quads), size.w, size.h, rotationOfPageElRef.current(pageEl))
+      const r = pageEl.getBoundingClientRect()
       return {
-        top: r.top + v.y * scale - PAD,
-        bottom: r.top + (v.y + v.h) * scale + PAD,
-        left: r.left + v.x * scale
+        left: r.left + v.x * scale,
+        top: r.top + v.y * scale,
+        right: r.left + (v.x + v.w) * scale,
+        bottom: r.top + (v.y + v.h) * scale
       }
     },
     [sizes]
   )
+
+  const annotAvoidRect = useCallback(
+    (pageNumber: number, record: PageAnnotation): { top: number; bottom: number; left: number } | null => {
+      const el = allPageElsRef.current().find((p) => Number(p.dataset.page) === pageNumber)
+      if (!el) return null
+      const box = annotClientRect(el, pageNumber, record)
+      if (!box) return null
+      const PAD = 16 // the handles sit ~10 px outside the frame
+      return { top: box.top - PAD, bottom: box.bottom + PAD, left: box.left }
+    },
+    [annotClientRect]
+  )
+  annotAvoidRectRef.current = annotAvoidRect
 
   /** The annotation records of the document a PANE shows: pane B resolves to
    *  its own session's map when it holds another file. Every DOM-driven
@@ -5064,7 +5451,9 @@ export default function PdfViewer({
           pageNumber,
           mode: 'point',
           pagePoint: { x: px, y: py },
-          foreign: doc === 'split'
+          foreign: doc === 'split',
+          // Set by PdfPage on each external link's anchor
+          linkUrl: (target as HTMLElement | null)?.closest?.<HTMLElement>('a.pdf-link')?.dataset.url
         })
       } else {
         setMenu(null)
@@ -5095,7 +5484,7 @@ export default function PdfViewer({
   // annotations and opens the properties popover
   const onMouseUp = useCallback(
     (e: React.MouseEvent) => {
-      if (e.button !== 0 || drawToolRef.current) return
+      if (e.button !== 0 || drawToolRef.current || handToolRef.current) return
       // A completed note drag must not open the properties popover
       if (performance.now() - dragEndAtRef.current < 400) return
       const { clientX, clientY, target } = e
@@ -5172,6 +5561,37 @@ export default function PdfViewer({
     [pagePointFromClient, openFreeTextEditor, annotsFor]
   )
 
+  /** Hand tool: drag the column under the pointer. Window listeners rather
+   *  than pointer capture, since the pages' handlers are mouse events — a
+   *  finger pans natively and never reaches here, and a pen the browser does
+   *  not pan arrives as compat mouse events and pans the same way. A paged
+   *  column holds its snap for the drag, as the pinch does, and takes it
+   *  back on release. */
+  const startHandDrag = useCallback((e: React.MouseEvent) => {
+    const el = e.currentTarget as HTMLElement
+    const startX = e.clientX
+    const startY = e.clientY
+    const left = el.scrollLeft
+    const top = el.scrollTop
+    e.preventDefault()
+    el.classList.add('is-grabbing')
+    holdSnap(el)
+    const move = (ev: MouseEvent): void => {
+      el.scrollLeft = left - (ev.clientX - startX)
+      el.scrollTop = top - (ev.clientY - startY)
+    }
+    const up = (): void => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      window.removeEventListener('blur', up)
+      el.classList.remove('is-grabbing')
+      releaseSnap(el)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    window.addEventListener('blur', up)
+  }, [])
+
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     setMenu((m) => (m ? null : m))
     setAnnotPopover((p) => (p ? null : p))
@@ -5180,6 +5600,10 @@ export default function PdfViewer({
     if (!searchOpenRef.current) setSearchHits((h) => (h ? null : h))
     // Mousedown on a note bubble arms a drag (movement threshold decides
     // between drag and the plain click that opens the popover)
+    if (handToolRef.current) {
+      if (e.button === 0) startHandDrag(e)
+      return
+    }
     if (e.button !== 0 || drawToolRef.current || annotsHiddenRef.current) return
     // A resize handle already took this gesture. Its pointerdown fires first and
     // stops there, but the compat mousedown still arrives here — without this the
@@ -5205,10 +5629,73 @@ export default function PdfViewer({
     }
   }, [pagePointFromClient, annotsFor])
 
-  // ---------- Hover comment tooltip ----------
+  // ---------- Hover comment card ----------
+  //
+  // A note's or a markup's comment, shown while the pointer rests on the
+  // mark. Until 2026-10-27 this was a tooltip: it followed the pointer, had
+  // no height limit and died the moment the pointer left the mark, so a long
+  // comment ran off the window and could not be reached (Emil). Now it is a
+  // card in the link preview's mould: hung off the mark itself so it stands
+  // still while the pointer travels to it, kept open while the pointer is on
+  // the mark OR the card (with the preview's grace for the way between), cut
+  // at a height with the edge fading where more is left (no scrollbar), and
+  // closed by Esc, a scroll, a click, or the pointer leaving both.
 
-  const [hoverTip, setHoverTip] = useState<{ x: number; y: number; text: string } | null>(null)
+  const HOVER_CLOSE_GRACE_MS = 220
+  const [hoverTip, setHoverTip] = useState<{
+    id: string
+    text: string
+    /** The mark's box in viewport coordinates — the card hangs off it */
+    anchor: { left: number; top: number; right: number; bottom: number }
+  } | null>(null)
+  const hoverTipRef = useRef(hoverTip)
+  hoverTipRef.current = hoverTip
   const hoverThrottleRef = useRef(0)
+  const hoverCloseTimer = useRef(0)
+  /** The pointer is on the card itself — a miss on the pages must not close it */
+  const hoverOnCardRef = useRef(false)
+  const clearHoverClose = useCallback(() => {
+    if (hoverCloseTimer.current) {
+      window.clearTimeout(hoverCloseTimer.current)
+      hoverCloseTimer.current = 0
+    }
+  }, [])
+  const scheduleHoverClose = useCallback(() => {
+    if (!hoverTipRef.current) return
+    clearHoverClose()
+    hoverCloseTimer.current = window.setTimeout(() => {
+      hoverCloseTimer.current = 0
+      if (!hoverOnCardRef.current) setHoverTip(null)
+    }, HOVER_CLOSE_GRACE_MS)
+  }, [clearHoverClose])
+  const closeHoverTip = useCallback(() => {
+    clearHoverClose()
+    hoverOnCardRef.current = false
+    if (hoverTipRef.current) setHoverTip(null)
+  }, [clearHoverClose])
+  // The card is a transient: anything that moves the page under it or asks
+  // for something else closes it at once. A scroll INSIDE the card is its
+  // own (overscroll-behavior: contain keeps it off the pages).
+  useEffect(() => {
+    if (!hoverTip) return
+    const inCard = (target: EventTarget | null): boolean =>
+      !!(target as Element | null)?.closest?.('.annot-hover-tip')
+    const onScroll = (e: Event): void => {
+      if (!inCard(e.target)) closeHoverTip()
+    }
+    const onDown = (e: MouseEvent): void => {
+      if (!inCard(e.target)) closeHoverTip()
+    }
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('mousedown', onDown, true)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('mousedown', onDown, true)
+    }
+  }, [hoverTip, closeHoverTip])
+  /** Open AND on screen: a menu, a bubble or a note draft over the mark
+   *  takes the card's place, and Esc then goes to that, not to the card */
+  const hoverCardShown = hoverTip !== null && !menu && !annotPopover && !noteDraft
 
   const onPagesMouseMove = useCallback((e: React.MouseEvent) => {
     const now = performance.now()
@@ -5223,27 +5710,31 @@ export default function PdfViewer({
       if (aiPeekRef.current) setAiPeek(false)
     }
     if (drawToolRef.current || annotDragRef.current || annotsHiddenRef.current) {
-      setHoverTip((tip) => (tip ? null : tip))
+      closeHoverTip()
       return
     }
     const pageEl = (e.target as HTMLElement | null)?.closest?.('.pdf-page') as HTMLElement | null
     if (!pageEl) {
-      setHoverTip((tip) => (tip ? null : tip))
+      scheduleHoverClose()
       return
     }
     const pageNumber = Number(pageEl.dataset.page)
     const [hx, hy] = pagePointFromClient(e.clientX, e.clientY, pageEl)
-    // annotsFor: tooltips read whatever document the hovered COLUMN shows
+    // annotsFor: the card reads whatever document the hovered COLUMN shows
     const hit = annotationHitTest(annotsFor(paneOfEl(pageEl), pageNumber), hx, hy)
     const text = hit?.type !== 'freetext' ? hit?.contents?.trim() : undefined
-    if (text) {
-      setHoverTip((tip) =>
-        tip && tip.text === text ? tip : { x: e.clientX, y: e.clientY, text }
-      )
+    if (hit && text) {
+      // Back on the mark (or still on it): whatever close was pending is off
+      clearHoverClose()
+      const open = hoverTipRef.current
+      if (open && open.id === hit.id && open.text === text) return
+      const anchor = annotClientRect(pageEl, pageNumber, hit)
+      if (anchor) setHoverTip({ id: hit.id, text, anchor })
     } else {
-      setHoverTip((tip) => (tip ? null : tip))
+      // Off the mark: the grace lets the pointer reach the card
+      scheduleHoverClose()
     }
-  }, [pagePointFromClient, annotsFor])
+  }, [pagePointFromClient, annotsFor, annotClientRect, clearHoverClose, scheduleHoverClose, closeHoverTip])
 
   // ---------- Annotation dragging (note bubbles + geometric shapes) ----------
 
@@ -5804,6 +6295,12 @@ export default function PdfViewer({
   // the whole chrome gets out of the way in one gesture.
   const preUnpinPanelsRef = useRef<{ toc: boolean; ai: boolean } | null>(null)
   const togglePin = useCallback(() => {
+    // Android fullscreen holds the toolbar tucked whatever the pin says:
+    // asking for it pinned there means leaving fullscreen
+    if (isAndroid && fullscreenRef.current) {
+      toggleFullscreenRef.current()
+      return
+    }
     setToolbarPinned((pinned) => {
       const next = !pinned
       saveToolbarPinned(next)
@@ -5850,6 +6347,10 @@ export default function PdfViewer({
     saveSearchListOpen(false)
     // The assistant re-reads this when the panel next opens
     clearAiTextScale()
+    // The reading font goes back to the system face at once; the menu's
+    // field re-reads the store when it next opens
+    clearReadingFont()
+    applyReadingFont('')
     setPanelW({ ...PANEL_DEFAULTS })
     try {
       localStorage.removeItem(PANEL_LS_KEY)
@@ -5881,10 +6382,23 @@ export default function PdfViewer({
     setFullscreen((f) => {
       const next = !f
       bridge.setFullscreen(next)
-      if (next) showToast(t('viewer.fullscreenToast'))
+      if (next) showToast(t(isAndroid ? 'viewer.fullscreenToastTouch' : 'viewer.fullscreenToast'))
+      if (next && isAndroid) setToolbarPeek(false)
       return next
     })
   }, [showToast])
+  toggleFullscreenRef.current = toggleFullscreen
+
+  // Fullscreen can end from outside the toolbar (Android's back button, the
+  // browser's own Esc): follow the platform so the next tap does not have to
+  // undo a state that is already gone
+  useEffect(
+    () =>
+      bridge.onFullScreen((fs) => {
+        if (!fs) setFullscreen(false)
+      }),
+    []
+  )
 
   // Presentation mode: a self-contained fullscreen slideshow overlay. Entering
   // takes the window into OS fullscreen (if it wasn't already) so nothing but
@@ -6028,6 +6542,32 @@ export default function PdfViewer({
     },
     [pdf, payload.name, showToast]
   )
+
+  /** «Kopier for KI»: this document's marks and conversations as one text for
+   *  a tool that cannot reach the MCP server (ChatGPT in a browser). The
+   *  reader's own act, so a locked document copies too — like the export. */
+  const copyNotesForAi = useCallback(async () => {
+    if (!pdf) return
+    const record = buildDocNotes({
+      path: payload.path,
+      name: payload.name,
+      annots: annotsRef.current,
+      excerpts: await computeExcerpts(pdf, annotsRef.current),
+      pages: pdf.numPages,
+      doi,
+      title: metaTitle,
+      locked: false
+    })
+    const md = copyForAiMarkdown(record, await bridge.getConversations(payload.path))
+    if (!md) {
+      showToast(t('viewer.nothingToCopy'))
+      return
+    }
+    navigator.clipboard?.writeText(md).then(
+      () => showToast(t('viewer.copiedForAi')),
+      () => {} // clipboard denied — nothing sensible to do
+    )
+  }, [pdf, payload.path, payload.name, doi, metaTitle, showToast])
 
   const jumpToAnnotIn = useCallback((pane: PaneId, pageNumber: number, record: PageAnnotation) => {
     const handle = handleForRef.current(pane)
@@ -6188,14 +6728,18 @@ export default function PdfViewer({
 
   /** Poll until the page's text layer exists (it renders asynchronously) */
   const waitForTextLayer = useCallback(
-    (pane: PaneId, pageNumber: number, timeoutMs = 4000): Promise<HTMLElement | null> =>
+    (pane: PaneId, pageNumber: number, timeoutMs = 4000, imageWords = false): Promise<HTMLElement | null> =>
       new Promise((resolve) => {
         const t0 = Date.now()
         const tick = (): void => {
           const pageEl = handleForRef.current(pane)?.el()?.querySelector<HTMLElement>(
             `.pdf-page[data-page="${pageNumber}"]`
           )
-          if (pageEl?.querySelector(TEXT_SPANS_READY_SELECTOR)) return resolve(pageEl)
+          // A range among the words in the page's images waits for those
+          // too: they join the layer after its first build (PdfPage)
+          if (pageEl?.querySelector(imageWords ? IMAGE_SPANS_READY_SELECTOR : TEXT_SPANS_READY_SELECTOR)) {
+            return resolve(pageEl)
+          }
           if (Date.now() - t0 > timeoutMs) return resolve(pageEl ?? null)
           window.setTimeout(tick, 120)
         }
@@ -6206,7 +6750,7 @@ export default function PdfViewer({
 
   const gotoMatch = useCallback(
     async (matches: SearchMatch[], i: number, recordBack: boolean) => {
-      const texts = pageTextsRef.current
+      const texts = pageTextsRef.current ?? searchTextsRef.current
       if (!texts || matches.length === 0) return
       // Search moves the column being worked in — the active one — so a hit
       // never yanks the column you were using as a reference. (Main document:
@@ -6217,11 +6761,12 @@ export default function PdfViewer({
       if (!handle?.ready() || !el) return
       const match = matches[i]
       setSearchIndex(i)
+      searchActiveRef.current = { pageNumber: match.pageNumber, start: match.start }
       if (recordBack) pushBack(pane)
       const seq = ++gotoSeqRef.current
       // Bring the page into view so its text layer renders, then refine
       handle.scrollToPage(match.pageNumber)
-      const pageEl = await waitForTextLayer(pane, match.pageNumber)
+      const pageEl = await waitForTextLayer(pane, match.pageNumber, 6000, inImageWords(texts[match.pageNumber - 1], match))
       if (seq !== gotoSeqRef.current || !pageEl) return
       const rects = resolveMatchRects(pageEl, texts[match.pageNumber - 1], match, handle.scale())
       if (!rects) {
@@ -6262,27 +6807,63 @@ export default function PdfViewer({
       return
     }
     setSearchBusy(true)
-    const timer = window.setTimeout(async () => {
-      try {
-        const texts = (pageTextsRef.current ??= await buildPageTexts(pdf))
-        if (seq !== searchSeqRef.current) return
-        const matches = findMatches(texts, query, searchOptions)
-        setSearchMatches(matches)
-        setSearchBusy(false)
-        if (matches.length > 0) {
-          const recordBack = !searchJumpedRef.current
-          searchJumpedRef.current = true
-          void gotoMatch(matches, 0, recordBack)
-        } else {
+    // Closing the bar, or the next keystroke, gives up the OCR pages this
+    // search was still waiting for (the next keystroke asks again at once,
+    // and the pages already read are kept)
+    const abort = new AbortController()
+    let jumped = false
+    /** Matches in `texts`; `final` once every page is in. A scanned document
+     *  arrives a page at a time, and its hits show as they are found — a long
+     *  book takes minutes to read, and the first hit is worth having now. */
+    const show = (texts: PageText[], final: boolean): void => {
+      if (seq !== searchSeqRef.current) return
+      const matches = findMatches(texts, query, searchOptions)
+      searchTextsRef.current = texts
+      setSearchMatches(matches)
+      setSearchBusy(false)
+      if (matches.length === 0) {
+        if (final) {
           setSearchIndex(-1)
           setSearchHits(null)
         }
+        return
+      }
+      if (jumped) {
+        // Hits on earlier pages shift the list: keep the index on the hit shown
+        const active = searchActiveRef.current
+        const at = active ? matches.findIndex((m) => m.pageNumber === active.pageNumber && m.start === active.start) : -1
+        if (at >= 0) setSearchIndex(at)
+        return
+      }
+      jumped = true
+      const recordBack = !searchJumpedRef.current
+      searchJumpedRef.current = true
+      void gotoMatch(matches, 0, recordBack)
+    }
+    const timer = window.setTimeout(async () => {
+      try {
+        // Search waits for the words in images (and shows what it has
+        // meanwhile); a text built without them is read again
+        const texts =
+          pageTextsFullRef.current && pageTextsRef.current
+            ? pageTextsRef.current
+            : await buildPageTexts(pdf, {
+                images: 'wait',
+                signal: abort.signal,
+                onProgress: (partial) => show(partial, false)
+              })
+        pageTextsRef.current = texts
+        pageTextsFullRef.current = true
+        show(texts, true)
       } catch {
         if (seq === searchSeqRef.current) setSearchBusy(false)
       }
     }, 250)
-    return () => window.clearTimeout(timer)
-  }, [searchOpen, searchQuery, searchOptions, pdf, gotoMatch])
+    return () => {
+      window.clearTimeout(timer)
+      abort.abort()
+    }
+  }, [searchOpen, searchQuery, searchOptions, pdf, gotoMatch, ocrEpoch])
 
   // Highlight-all: resolve every match on the pages that are mounted right now.
   //
@@ -6303,7 +6884,7 @@ export default function PdfViewer({
     setSearchAllHits((prev) =>
       prev && (prev.pane !== pane || prev.rotation !== paneRotation) ? null : prev
     )
-    const texts = pageTextsRef.current
+    const texts = pageTextsRef.current ?? searchTextsRef.current
     const handle = handleForRef.current(pane)
     const host = handle?.el()
     if (!texts || !handle || !host) return
@@ -6321,7 +6902,8 @@ export default function PdfViewer({
         if (!host.querySelector(`.pdf-page[data-page="${pageNumber}"]`)) continue
         // Mounted, but the text layer renders asynchronously after mount — wait
         // for it rather than losing the page's highlights until the next scroll.
-        const pageEl = await waitForTextLayer(pane, pageNumber, 2000)
+        const imageWords = list.some((m) => inImageWords(texts[pageNumber - 1], m))
+        const pageEl = await waitForTextLayer(pane, pageNumber, imageWords ? 6000 : 2000, imageWords)
         if (cancelled || seq !== allHitsSeqRef.current) return
         if (!pageEl) continue
         const rects = resolveAllMatchRects(pageEl, texts[pageNumber - 1], list, handle.scale())
@@ -6429,6 +7011,8 @@ export default function PdfViewer({
       system: chatSystem() + (prep.excerpt ? excerptSystemNote() : ''),
       messages: [{ role: 'user', text: semanticSearchPrompt(query) }],
       document: { title: payload.name, text: prep.doc.text },
+      // The chat's rule, for the same cache; the prompt names the language
+      languageRule: chatLanguageRule(),
       purpose: 'search'
     })
     if (semanticReqRef.current !== requestId) return // superseded/aborted
@@ -6445,7 +7029,7 @@ export default function PdfViewer({
     for (const part of parts) {
       const label = part.text.replace(/^\s*\d+[.)]\s*/, '').trim()
       for (const c of part.citations) {
-        if (c.kind === 'web') continue // semantic hits must live in the document
+        if (c.kind === 'web' || c.kind === 'conversation') continue // semantic hits must live in the document
         const fallback = c.kind === 'char' ? c.citedText : c.quote
         hits.push({ label: label || fallback.slice(0, 80), citation: c, pageNumber: citationPage(c, prep.doc) })
       }
@@ -6545,13 +7129,21 @@ export default function PdfViewer({
       // Like search: the cited passage opens in the column being worked in
       // (main document — citations resolve against the tab's own text)
       const pane = mainDocPane()
-      const handle = handleForRef.current(pane)
+      // A citation handed over from the library or another document arrives
+      // while this tab is still laying its pages out: wait for that (a few
+      // seconds at most) rather than drop the jump. A click in a settled
+      // view is ready at once and never waits.
+      let handle = handleForRef.current(pane)
+      for (let waited = 0; waited < 5000 && !(handle?.ready() && handle.el()); waited += 100) {
+        await new Promise((r) => setTimeout(r, 100))
+        handle = handleForRef.current(pane)
+      }
       const el = handle?.el()
       if (!handle?.ready() || !el) return
       pushBack(pane)
       const seq = ++gotoSeqRef.current
       handle.scrollToPage(resolved.pageNumber)
-      const pageEl = await waitForTextLayer(pane, resolved.pageNumber)
+      const pageEl = await waitForTextLayer(pane, resolved.pageNumber, 6000, inImageWords(texts[resolved.pageNumber - 1], resolved))
       if (seq !== gotoSeqRef.current || !pageEl) return
       const rects = resolveMatchRects(
         pageEl,
@@ -6621,7 +7213,9 @@ export default function PdfViewer({
    *  prints the draft file the same way through a hidden window. */
   const printDocument = useCallback(() => {
     void (async () => {
-      if (!isElectron) {
+      // Android prints through its own print service (bridge.printFile, below):
+      // a WebView has no PDF viewer to hand the blob to, and no window.print
+      if (!isElectron && !isAndroid) {
         const bytes = await browserCurrentBytes(payload.path)
         if (bytes) {
           const url = URL.createObjectURL(
@@ -6675,12 +7269,14 @@ export default function PdfViewer({
     // innermost thing first. Only bare Escape, so a chord like Ctrl+Escape can
     // still be bound to something below.
     if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      if (freeTextDraft) setFreeTextDraft(null)
+      if (hoverCardShown) closeHoverTip()
+      else if (freeTextDraft) setFreeTextDraft(null)
       else if (noteDraft) discardNote()
       else if (menu) setMenu(null)
       else if (aiQuick) setAiQuick(null)
       else if (annotPopover) setAnnotPopover(null)
       else if (selected) setSelected(null)
+      else if (handTool) setHandTool(false)
       else if (activeTool) setActiveTool(null)
       else if (markupTool) setMarkupTool(null)
       else if (readAloud !== 'closed') stopReadAloud()
@@ -6691,8 +7287,32 @@ export default function PdfViewer({
       return
     }
 
+    // Space held = the hand, for as long as it is held (opt-in, in the
+    // hand's own menu). Not a command in the map — a chord fires on press,
+    // this one lasts as long as the key — and never from a text field or a
+    // focused button, where Space already means something. With the hand
+    // already up by its toggle, Space keeps scrolling as it always did.
+    if (
+      e.key === ' ' &&
+      !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey &&
+      prefs.input.spaceHand &&
+      !isTyping && tag !== 'BUTTON' && !inTextField(e.target) &&
+      (!handToolRef.current || spaceHeldRef.current)
+    ) {
+      e.preventDefault()
+      if (!e.repeat && !handToolRef.current) {
+        spaceHeldRef.current = true
+        setHandTool(true)
+      }
+      return
+    }
+
     const command = commandForEvent(e, isTyping)
     if (!command) return
+    // A shortcut that arms a mode shows the (tucked) toolbar where the mode
+    // is lit — before the switch, so a tool key that ends up arming nothing
+    // (AI off for the snip) still shows the reader where the press went
+    if (ARMS_A_MODE.has(command) || command.startsWith('tool.')) revealToolbarKey()
     // Every case below preventDefaults: reaching here means the keypress WAS a
     // bound command, and letting the browser also act on it (Ctrl+S offering to
     // save the viewer page, Ctrl+F opening its own find bar) is never wanted.
@@ -6749,7 +7369,7 @@ export default function PdfViewer({
         // would offer to save the viewer PAGE, never the PDF) it has to: it does
         // exactly what the Save-a-copy button does — one Save dialog, or a
         // download where pickers are missing. Edge's built-in viewer sets that bar.
-        if (dirty || (!isElectron && !isExtension)) void saveDocument()
+        if (dirty || !writesInPlace) void saveDocument()
         else if (isExtension && isRemoteSource(payload.path)) void saveDocumentAs()
         break
       case 'file.saveAs':
@@ -6885,6 +7505,10 @@ export default function PdfViewer({
         e.preventDefault()
         toggleBookmark(currentPageRef.current)
         break
+      case 'nav.hand':
+        e.preventDefault()
+        toggleHandTool()
+        break
       // Tools toggle: the bound key arms the tool, and pressing it again puts it
       // down — the same thing clicking its toolbar button twice does.
       case 'tool.pen':
@@ -7006,6 +7630,7 @@ export default function PdfViewer({
       if (aiHitTimerRef.current) window.clearTimeout(aiHitTimerRef.current)
       if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current)
       if (touchToolbarTimerRef.current) window.clearTimeout(touchToolbarTimerRef.current)
+      if (keyToolbarTimerRef.current) window.clearTimeout(keyToolbarTimerRef.current)
       if (fullscreen) bridge.setFullscreen(false)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7073,51 +7698,38 @@ export default function PdfViewer({
     paneRotation: ViewRotation
   ): React.JSX.Element | null => (
     <>
-      {freeTextDraft && freeTextDraft.pane === pane && (
-        <textarea
-          className="freetext-editor"
-          autoFocus
-          spellCheck={false}
-          defaultValue={freeTextDraft.text ?? ''}
-          style={{
-            left: lay.lefts[freeTextDraft.pageNumber - 1] + freeTextDraft.x * paneScale,
-            top: lay.tops[freeTextDraft.pageNumber - 1] + freeTextDraft.y * paneScale,
-            width: freeTextDraft.w * paneScale,
-            height: freeTextDraft.h * paneScale,
-            // An edited box previews in ITS stored look; a new draft follows
-            // the tool preference live, so what you type is what commits
-            color: rgbCss(freeTextDraft.color ?? textPref.color, 1),
-            fontSize: (freeTextDraft.fontSize ?? textPref.fontSize) * paneScale,
-            // …and that includes the TYPEFACE. Typing in one face and watching
-            // it change on commit is not a preview, and it is not only
-            // cosmetic: the commit's minimum box is measured in the committed
-            // face, so an editor set in another one wraps somewhere else than
-            // the mark ends up wrapping (Emil, 2026-08-08).
-            ...textFontCss(editorFont),
-            ...(freeTextDraft.editingId ? { background: 'rgba(255, 255, 255, 0.96)' } : {})
-          }}
-          onKeyDown={(e) => {
-            // App shortcuts bubble to the window handler (find steals focus and
-            // the onBlur below commits, or discards, an empty draft)
-            if (bubblesWhileTyping(e)) return
-            e.stopPropagation()
-            if (e.key === 'Escape') setFreeTextDraft(null)
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              const el = e.target as HTMLTextAreaElement
-              const value = el.value.trim()
-              if (value) saveFreeText(value, el.offsetWidth / paneScale, el.offsetHeight / paneScale)
-              else setFreeTextDraft(null)
-            }
-          }}
-          onBlur={(e) => {
-            const el = e.target
-            const value = el.value.trim()
-            if (value) saveFreeText(value, el.offsetWidth / paneScale, el.offsetHeight / paneScale)
-            else setFreeTextDraft(null)
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-        />
-      )}
+      {freeTextDraft &&
+        freeTextDraft.pane === pane &&
+        (() => {
+          // The page the box is on, in points — from the document the pane
+          // SHOWS — so a growing box knows where the page's right edge is
+          const page = (pane === 'b' && sessionB ? sessionB.sizes : sizes)[freeTextDraft.pageNumber - 1]
+          return (
+            <FreeTextEditor
+              // A new draft is a new editor: its size and position state
+              // start over rather than carrying the last box's along
+              key={`${freeTextDraft.pageNumber}:${freeTextDraft.x}:${freeTextDraft.y}:${freeTextDraft.editingId ?? ''}`}
+              pageLeft={lay.lefts[freeTextDraft.pageNumber - 1]}
+              pageTop={lay.tops[freeTextDraft.pageNumber - 1]}
+              scale={paneScale}
+              pageW={page?.w ?? 612}
+              pageH={page?.h ?? 792}
+              x={freeTextDraft.x}
+              y={freeTextDraft.y}
+              w={freeTextDraft.w}
+              h={freeTextDraft.h}
+              text={freeTextDraft.text ?? ''}
+              // An edited box previews in ITS stored look; a new draft follows
+              // the tool preference live, so what you type is what commits
+              color={freeTextDraft.color ?? textPref.color}
+              fontSize={freeTextDraft.fontSize ?? textPref.fontSize}
+              font={editorFont}
+              opaque={!!freeTextDraft.editingId}
+              onCommit={(text, box) => void saveFreeText(text, box)}
+              onCancel={() => setFreeTextDraft(null)}
+            />
+          )
+        })()}
       {dragGhost &&
         dragGhost.pane === pane &&
         (() => {
@@ -7182,8 +7794,13 @@ export default function PdfViewer({
       className={`viewer${immersive ? ' toolbar-unpinned' : ''}${immersive && hudFaded ? ' hud-faded' : ''}`}
     >
       <div
+        ref={toolbarWrapRef}
         className={`toolbar-wrap${toolbarVisible ? '' : ' tucked'}`}
-        onMouseLeave={() => !toolbarPinned && setToolbarPeek(false)}
+        // Hover only, like the reveal: after a tap, Chromium sends mouse-type
+        // boundary events from the tap's point as the layout moves under it,
+        // and the toolbar a swipe had just revealed got a «leave» and tucked
+        // again at once (a tablet in split view, after tapping a menu item)
+        onPointerLeave={(e) => !toolbarPinned && isHover(e) && setToolbarPeek(false)}
       >
         <Toolbar
           page={currentPage}
@@ -7196,6 +7813,10 @@ export default function PdfViewer({
           canNavForward={activeNav.forward.length > 0}
           onNavBack={goBack}
           onNavForward={goForward}
+          handTool={handTool}
+          onToggleHand={toggleHandTool}
+          spaceHand={prefs.input.spaceHand}
+          onSpaceHandChange={setSpaceHand}
           activeTool={activeTool}
           toolPrefs={toolPrefs}
           onToolSelect={selectTool}
@@ -7240,9 +7861,13 @@ export default function PdfViewer({
           dirty={dirty}
           onSave={() => void saveDocument()}
           onSaveAs={() => void saveDocumentAs()}
-          canSaveInPlace={isElectron || isExtension}
+          canSaveInPlace={writesInPlace}
           annotsHidden={annotsHidden}
           onToggleAnnots={() => setAnnotsHidden((h) => !h)}
+          marginOn={marginNotes}
+          marginSide={marginView.side}
+          onToggleMargin={toggleMarginNotes}
+          onMarginSideChange={setMarginSide}
           canUndo={undoDepths.undo > 0}
           canRedo={undoDepths.redo > 0}
           onUndo={() => void performUndoRedo('undo')}
@@ -7292,6 +7917,8 @@ export default function PdfViewer({
                 active={tocPinned && sidebarTab === 'outline'}
                 onClick={toggleAttachments}
               />
+              {/* A scanned document while OCR waits to be asked for */}
+              <OcrBadge offer={ocrOffer} onEnable={onEnableOcr} />
             </>
           }
           onOpenAiSettings={() => {
@@ -7300,11 +7927,13 @@ export default function PdfViewer({
           }}
           toolbarPinned={toolbarPinned}
           onTogglePin={togglePin}
+          onPageFieldShortcut={revealToolbarKey}
           onPresent={enterPresentation}
           onToggleFullscreen={toggleFullscreen}
           splitOpen={splitOpen}
           onSwapPanes={swapPanes}
-          onToggleSplit={toggleSplit}
+          onToggleSplit={splitButton}
+          splitPickerOpen={splitPicking}
           splitCandidates={
             onRequestOpenInSplit && onRequestOpenOtherInSplit
               ? {
@@ -7314,6 +7943,7 @@ export default function PdfViewer({
                 }
               : undefined
           }
+          mosaic={mosaic}
           onClosePane={closePane}
           activePane={activePane}
           onActivatePane={activatePane}
@@ -7334,7 +7964,13 @@ export default function PdfViewer({
       {/* Tucked-toolbar reveal: mouse hovers this top hot-zone; touch swipes
           down from the top edge (handled in the touch effect) — no permanent
           on-screen affordance. */}
-      {immersive && <div className="reveal-zone" onMouseEnter={() => setToolbarPeek(true)} />}
+      {/* Hover only — not the echo of a tap (isHover, above) */}
+      {immersive && (
+        <div
+          className="reveal-zone"
+          onPointerEnter={(e) => isHover(e) && setToolbarPeek(true)}
+        />
+      )}
 
       {/* Edge rails — pointer near an edge fades the HANDLE in (window-level
           hint, no interactive strip: the pages scrollbar at the right edge
@@ -7421,6 +8057,9 @@ export default function PdfViewer({
           onOutdentBookmark={outdentBookmarkAt}
           onToggleBookmarkCollapsed={toggleBookmarkCollapsed}
           onExport={exportAnnotations}
+          onCopyForAi={() => void copyNotesForAi()}
+          aiToolsKeptOut={aiToolsKeptOut}
+          onChangeAiTools={() => openAiTools(payload.path)}
           onAskAi={askAnnotations}
           docName={payload.name}
           docPath={payload.path}
@@ -7455,8 +8094,40 @@ export default function PdfViewer({
               <span>{t('viewer.dropSplitHint')}</span>
             </div>
           )}
+          {splitPicking && !splitOpen && splitCandidates && (
+            <SplitPicker
+              docs={splitCandidates}
+              currentPath={payload.path}
+              threeOpen={!!mosaic?.open}
+              canThree={!!mosaic?.canOpen}
+              onOne={() => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+              }}
+              onThree={
+                mosaic
+                  ? () => {
+                      setSplitPicking(false)
+                      if (!mosaic.open) mosaic.onToggle()
+                    }
+                  : undefined
+              }
+              // Two documents: the mosaic (if it showed) ends first
+              onPick={(path) => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+                void onRequestOpenInSplit?.(path)
+              }}
+              onOther={() => {
+                setSplitPicking(false)
+                if (mosaic?.open) mosaic.onToggle()
+                onRequestOpenOtherInSplit?.()
+              }}
+              onClose={() => setSplitPicking(false)}
+            />
+          )}
         <div
-          className={`pages${drawTool ? ' drawing' : ''}${paged ? ' paged' : ''}`}
+          className={`pages${drawTool ? ' drawing' : ''}${handTool ? ' hand' : ''}${paged ? ' paged' : ''}`}
           data-pane="a"
           data-dockey={payload.path}
           data-rotation={rotation}
@@ -7468,13 +8139,16 @@ export default function PdfViewer({
           onMouseDown={onMouseDown}
           onDoubleClick={onPagesDoubleClick}
           onMouseMove={onPagesMouseMove}
-          onMouseLeave={() => setHoverTip(null)}
+          onMouseLeave={scheduleHoverClose}
         >
           {layout && pdf ? (
             <div
               className="pages-inner"
               ref={innerRef}
-              style={{ height: layout.total, width: layout.contentWidth + marginGutter }}
+              style={{
+                height: Math.max(layout.total, marginColumnBottom + PAD_BOTTOM),
+                width: layout.contentWidth + marginGutter
+              }}
             >
               {paged && <PageSlots layout={layout} />}
               {sizes.map((size, i) => {
@@ -7641,6 +8315,7 @@ export default function PdfViewer({
                 onPageChange={setPaneBPage}
                 flash={paneFlash === 'b'}
                 drawTool={drawTool}
+                handTool={handTool}
                 fingerDraws={prefs.input.fingerDraws}
                 penPressure={prefs.input.penPressure}
                 // The frame follows the document the column shows — a selection
@@ -7657,7 +8332,7 @@ export default function PdfViewer({
                 onMouseDown={onMouseDown}
                 onDoubleClick={onPagesDoubleClick}
                 onMouseMove={onPagesMouseMove}
-                onMouseLeave={() => setHoverTip(null)}
+                onMouseLeave={scheduleHoverClose}
                 onScroll={onPaneBScroll}
                 onStrokeComplete={onStrokeComplete}
                 onErase={onEraseAt}
@@ -7705,6 +8380,10 @@ export default function PdfViewer({
                 seed={aiSeed}
                 onSeedConsumed={consumeAiSeed}
                 ensureDocument={ensureAiDocument}
+                ocrProgress={ocrScanProgress}
+                ocrOffer={ocrOffer}
+                onEnableOcr={onEnableOcr}
+                docEpoch={ocrEpoch}
                 hasAnnotations={hasAnnotations}
                 annotsAskId={annotsAskId}
                 getAnnotationsText={getAnnotationsText}
@@ -7717,7 +8396,8 @@ export default function PdfViewer({
                 chatSnip={chatSnip}
                 onChatSnipConsumed={() => setChatSnip(null)}
                 onRequestSnip={() => armSnip('chat')}
-                onDetach={() => {
+                // A phone has no second window to move the chat into
+                onDetach={isAndroid ? undefined : () => {
                   // The chat moves out; the docked panel closes behind it.
                   // Reopening it (A) is allowed — both write the same stored
                   // history, and the panel refreshes on the storage event.
@@ -7731,6 +8411,18 @@ export default function PdfViewer({
                 pagesBusy={chatPagesBusy}
                 currentPage={currentPage}
                 pageCount={sizes.length}
+                conversationAskId={conversationAskId}
+                isLocked={() => docPasswordRef.current !== undefined}
+                onOpenElsewhere={(path) => {
+                  // The host opens the document (a tab, focused or created),
+                  // then every viewer looks for the handoff — the one showing
+                  // that path opens its panel on the conversation
+                  if (onOpenPath) {
+                    void Promise.resolve(onOpenPath(path)).then(() =>
+                      window.dispatchEvent(new Event(CONVERSATION_HANDOFF_EVENT))
+                    )
+                  } else bridge.newWindow(path)
+                }}
               />
             </div>
           </div>
@@ -7772,6 +8464,9 @@ export default function PdfViewer({
               autoFocus
               value={pillInput}
               onChange={(e) => setPillInput(e.target.value.replace(/[^0-9]/g, ''))}
+              // autoFocus is a programmatic focus, which parks the caret at the
+              // END of the current page number — typing 5 on page 1 asked for 15
+              onFocus={(e) => e.currentTarget.select()}
               onBlur={() => setPillEditing(false)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
@@ -7804,6 +8499,10 @@ export default function PdfViewer({
           matches={searchMatches}
           index={searchIndex}
           busy={searchBusy}
+          ocr={ocrProgress}
+          ocrScan={ocrScanProgress}
+          ocrOffer={ocrOffer}
+          onEnableOcr={onEnableOcr}
           mode={searchMode}
           onModeChange={setSearchMode}
           aiStatus={semantic.status}
@@ -7974,6 +8673,21 @@ export default function PdfViewer({
                   annotPopover.doc
                 )
               }}
+              onFontSize={(fontSize) => {
+                // Same floor rule as the face: bigger letters need a bigger
+                // box, and a box the reader widened on purpose is not shrunk
+                const q = record.quads[0]
+                if (!q || fontSize === (record.fontSize ?? FREETEXT_SIZE)) return
+                const min = freetextMinSize(record.contents ?? '', fontSize, q.w, record.font)
+                const w = Math.max(q.w, min.w)
+                const h = Math.max(q.h, min.h)
+                changeAnnotation(
+                  annotPopover.pageNumber,
+                  record,
+                  { fontSize, ...(w !== q.w || h !== q.h ? { quads: [{ ...q, w, h }] } : {}) },
+                  annotPopover.doc
+                )
+              }}
               onContents={(contents) =>
                 changeAnnotation(annotPopover.pageNumber, record, { contents }, annotPopover.doc)
               }
@@ -8038,16 +8752,19 @@ export default function PdfViewer({
           </select>
         </div>
       )}
-      {hoverTip && !menu && !annotPopover && !noteDraft && (
-        <div
-          className="annot-hover-tip"
-          style={{
-            left: Math.min(hoverTip.x + 12, window.innerWidth - 280),
-            top: Math.min(hoverTip.y + 14, window.innerHeight - 120)
+      {hoverCardShown && hoverTip && (
+        <AnnotHoverCard
+          text={hoverTip.text}
+          anchor={hoverTip.anchor}
+          onPointerEnter={() => {
+            hoverOnCardRef.current = true
+            clearHoverClose()
           }}
-        >
-          {hoverTip.text}
-        </div>
+          onPointerLeave={() => {
+            hoverOnCardRef.current = false
+            scheduleHoverClose()
+          }}
+        />
       )}
       {toast && <div className="toast">{toast}</div>}
       {presentation && pdf && sizes.length > 0 && (

@@ -33,6 +33,7 @@ import {
   buildRows,
   GESTURE_SETTLE,
   MARGIN_NOTES_W,
+  midGestureZoomIn,
   PAD_BOTTOM,
   PAD_TOP,
   PAGE_GAP,
@@ -44,12 +45,18 @@ import {
   spreadRow,
   viewSize
 } from '../rotation'
-import { MarginJumpArrows } from './MarginNotes'
+import {
+  MarginJumpArrows,
+  marginStackBottom,
+  resetMarginStacks,
+  useMarginColumnBottom
+} from './MarginNotes'
 import type { MarginViewConfig } from './MarginNotes'
 import { makePaneHandle } from '../pane-handle'
 import type { PaneHandle } from '../pane-handle'
 import { clampZoom } from '../zoom'
 import { createPagedWheel, holdSnap, PageSlots, releaseSnap } from '../paged-view'
+import { isZoomWheel } from '../platform'
 import PdfPage from './PdfPage'
 import { OverlayScrollbars } from './OverlayScrollbars'
 
@@ -93,6 +100,8 @@ interface Props {
    *  persistent active-column signal is the toolbar's column switcher. */
   flash: boolean
   drawTool: DrawTool | null
+  /** Hand tool armed: the column takes the viewer's drag-to-pan class */
+  handTool: boolean
   /** Whether a finger may draw when a tool is armed — see tool-prefs InputPrefs */
   fingerDraws: boolean
   /** Pen tool + real pen: stylus pressure varies the stroke width */
@@ -178,6 +187,7 @@ export default function PagesPane({
   onPageChange,
   flash,
   drawTool,
+  handTool,
   fingerDraws,
   penPressure,
   selected,
@@ -295,8 +305,12 @@ export default function PagesPane({
       },
       coverPage
     )
+    // The margin strips' overhangs are in the old layout's coordinates (see
+    // the first column)
+    resetMarginStacks(innerRef.current)
     return shiftLayoutX(lay, marginView?.side === 'left' ? marginGutter : 0)
   }, [sizes, scale, containerWidth, rotation, spread, coverPage, marginGutter, marginView?.side, pagedHeight])
+  const marginColumnBottom = useMarginColumnBottom(innerRef, docKey, !!marginView)
   const layoutRef = useRef(layout)
   layoutRef.current = layout
 
@@ -326,7 +340,9 @@ export default function PagesPane({
     let from = 1
     let to = 1
     for (let i = 0; i < lay.tops.length; i++) {
-      if (lay.tops[i] + lay.heights[i] < top) from = i + 2
+      // Overhanging margin comments keep their page mounted (see column A)
+      const stackBottom = marginView ? marginStackBottom(innerRef.current, docKey, i + 1) : null
+      if (Math.max(lay.tops[i] + lay.heights[i], stackBottom ?? 0) < top) from = i + 2
       if (lay.tops[i] <= bottom) to = i + 1
     }
     setRange((prev) => (prev[0] === from && prev[1] === to ? prev : [from, Math.max(from, to)]))
@@ -342,7 +358,7 @@ export default function PagesPane({
       currentPageRef.current = page
       onPageChange(page)
     }
-  }, [onPageChange])
+  }, [onPageChange, marginView, docKey])
   const updateRangeRef = useRef(updateRange)
   updateRangeRef.current = updateRange
 
@@ -549,7 +565,8 @@ export default function PagesPane({
     return true
   }, [])
 
-  // Ctrl+wheel (and trackpad pinch, which Chromium reports as ctrl+wheel) —
+  // Ctrl+wheel (and trackpad pinch, which Chromium reports as ctrl+wheel;
+  // Cmd+wheel on macOS too) —
   // the same CSS-preview + anchored-commit pipeline as the main column, so a
   // pinch feels identical whichever column the cursor is over.
   useEffect(() => {
@@ -557,7 +574,7 @@ export default function PagesPane({
     if (!el) return
     const pagedWheel = createPagedWheel()
     const onWheel = (e: WheelEvent): void => {
-      if (!e.ctrlKey) {
+      if (!isZoomWheel(e)) {
         // Paged: the wheel turns pages (see createPagedWheel)
         const lay = layoutRef.current
         if (pagedRef.current && lay) pagedWheel(e, el, lay)
@@ -577,8 +594,11 @@ export default function PagesPane({
       window.clearTimeout(g.timer)
       // Long pinches blur (a CSS-scaled canvas): re-render mid-gesture once the
       // factor drifts far enough; the anchored commit keeps that seamless.
-      if (g.factor > 1.3 || g.factor < 1 / 1.3) commitGestureRef.current()
-      else g.timer = window.setTimeout(() => commitGestureRef.current(), GESTURE_SETTLE)
+      if (g.factor > midGestureZoomIn(window.devicePixelRatio || 1) || g.factor < 1 / 1.3) {
+        commitGestureRef.current()
+      } else {
+        g.timer = window.setTimeout(() => commitGestureRef.current(), GESTURE_SETTLE)
+      }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => {
@@ -599,7 +619,7 @@ export default function PagesPane({
 
     const onStart = (e: TouchEvent): void => {
       if (drawTool || e.touches.length < 2) return
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       if (pinch.active) return
       const mid = {
         x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
@@ -613,7 +633,7 @@ export default function PagesPane({
       const g = gestureRef.current
       const inner = innerRef.current
       if (!pinch.active || !g || !inner || e.touches.length < 2 || pinch.startDist <= 0) return
-      e.preventDefault()
+      if (e.cancelable) e.preventDefault()
       const target = clampZoom(scaleRef.current * (dist(e.touches) / pinch.startDist))
       g.factor = target / scaleRef.current
       inner.style.transform = `scale(${g.factor})`
@@ -714,7 +734,7 @@ export default function PagesPane({
         </div>
       )}
       <div
-        className={`pages${drawTool ? ' drawing' : ''}${paged ? ' paged' : ''}`}
+        className={`pages${drawTool ? ' drawing' : ''}${handTool ? ' hand' : ''}${paged ? ' paged' : ''}`}
         data-pane="b"
         data-dockey={docKey}
         // Published so PdfViewer's pointer handlers can map a click in THIS
@@ -734,7 +754,10 @@ export default function PagesPane({
           <div
             className="pages-inner"
             ref={innerRef}
-            style={{ height: layout.total, width: layout.contentWidth + marginGutter }}
+            style={{
+              height: Math.max(layout.total, marginColumnBottom + PAD_BOTTOM),
+              width: layout.contentWidth + marginGutter
+            }}
           >
             {paged && <PageSlots layout={layout} />}
             {sizes.map((size, i) => {

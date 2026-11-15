@@ -47,14 +47,28 @@ export interface AiProviderProfile {
  *  reasoning_effort low/medium/high/xhigh for all three (docs/agent-notes/
  *  modeller-api.md, verified 2026-08-12, 2026-08-13 and 2026-09-26); 4.5 and
  *  4.6 stay in the regex even though the curated menu now offers 4.7, so a
- *  stored selection from before either switch keeps working. The match is
- *  deliberately narrow — other grok ids (4.3) stay out until someone
- *  verifies them, per the fewer-models-that-work rule.
+ *  stored selection from before either switch keeps working.
+ *
+ *  grok-4.3 is included because its own model page (docs.x.ai/developers/
+ *  models/grok-4.3, verified 2026-11-09) documents "Reasoning efforts
+ *  (supported): none, low, medium, high, xhigh" — the generic xAI reasoning
+ *  capabilities page still doesn't name 4.3 at all (only 4.5/4.6/4.7 and the
+ *  multi-agent variant), which is why this stayed an open question for three
+ *  months; the model's own page settles it. Unlike 4.5–4.7, 4.3 documents
+ *  `none`, so it does NOT go in `OPENAI_ALWAYS_REASONS_RE` below.
  *
  *  gpt-oss (Groq's openai/gpt-oss-120b and openai/gpt-oss-20b) is included
  *  because Groq documents reasoning_effort low/medium/high for both
- *  (console.groq.com/docs/reasoning, verified 2026-08-17). */
-export const OPENAI_REASONING_RE = /gpt-[5-9]|o[0-9]|grok-4\.[5-7]|gpt-oss/i
+ *  (console.groq.com/docs/reasoning, verified 2026-08-17).
+ *
+ *  gemini-4-argon is included because Google's OpenAI-compat guide
+ *  (ai.google.dev/gemini-api/docs/openai, verified 2026-10-19) maps
+ *  reasoning_effort minimal/low/medium/high to a `thinking_level` of
+ *  low/low/medium/high for this model BY NAME — the match is the literal id,
+ *  not a `gemini-4` family pattern, since the same table's other three
+ *  columns (3.1 Flash-Lite, 3 Flash, 2.5) don't correspond to any of our
+ *  curated Gemini ids (docs/agent-notes/modeller-api.md). */
+export const OPENAI_REASONING_RE = /gpt-[5-9]|o[0-9]|grok-4\.[3567]|gpt-oss|gemini-4-argon/i
 
 /** Models whose reasoning cannot be switched off, so «Av» maps to the lowest
  *  effort instead of `none` — the same honest mapping the Anthropic path uses
@@ -69,9 +83,16 @@ export const OPENAI_REASONING_RE = /gpt-[5-9]|o[0-9]|grok-4\.[5-7]|gpt-oss/i
  *  - gpt-oss on Groq takes low/medium/high only; `none` is reserved for the
  *    Qwen models Groq also hosts (console.groq.com/docs/reasoning, verified
  *    2026-08-31).
+ *  - gemini-4-argon: the reasoning_effort mapping table (ai.google.dev/
+ *    gemini-api/docs/openai, verified 2026-10-19) has no `none`/off row for
+ *    this model's column, and the page states reasoning "cannot be turned
+ *    off for Gemini 2.5 Pro or 3 models" — Argon is a newer reasoning model
+ *    in the same mandatory-thinking family, with no documented off switch.
+ *    Treated like Fable/Astra: «Av» sends the lowest effort instead of
+ *    guessing at an undocumented `none`.
  *  Until 2026-09-26 «Av» sent `none` to the last two — a value neither
  *  documents — and leaned on the degrade-on-400 net when it was refused. */
-export const OPENAI_ALWAYS_REASONS_RE = /gpt-6-astra|gpt-6\.1-sol|grok-4\.[5-7]|gpt-oss/i
+export const OPENAI_ALWAYS_REASONS_RE = /gpt-6-astra|gpt-6\.1-sol|grok-4\.[5-7]|gpt-oss|gemini-4-argon/i
 
 /** Mistral's reasoning switch is `reasoning_effort` too, but with a two-value
  *  domain: `"high"` (thinking on) or `"none"` (off — «the model thinks

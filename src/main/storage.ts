@@ -12,8 +12,10 @@ import type {
   Settings
 } from '../shared/types'
 import { DEFAULT_AI_MODELS, DEFAULT_SETTINGS } from '../shared/defaults'
+import { sanitizeMcpPolicy, type McpPolicy } from '../shared/mcp'
 import { normalizeRecents, pinRecent, recordRecent, removeRecent, restoreRecent } from '../shared/recents'
 import { sanitizeSession, type StoredSession } from '../shared/session'
+import { sanitizeFingerprints } from '../shared/doc-identity'
 export type { Settings }
 
 export interface StoredAiConfig extends AiConfig {
@@ -34,6 +36,9 @@ export interface AppState {
   positions: Record<string, ReadingPosition>
   /** Per-file page bookmarks, keyed by the same path as `positions` */
   bookmarks: Record<string, DocBookmark[]>
+  /** Each opened file's /ID[0] (shared/doc-identity.ts, issue #46): what lets
+   *  a moved or renamed file's records follow it to its new path */
+  fingerprints: Record<string, string>
   settings: Settings
   ai: StoredAiConfig
   /** Live model lists cached from the providers (see shared/ai-model-catalog.ts) */
@@ -46,6 +51,15 @@ export interface AppState {
    *  Written by main as the renderers report their strips; read once at
    *  launch. Shape-checked on load like the recents. */
   session?: StoredSession
+  /** What AI tools outside the app may read (shared/mcp.ts): each tool's
+   *  switch and what is kept out. Its own key, not in `settings` — resetting
+   *  the preferences must not let a document the reader kept out back in.
+   *  The MCP server reads it from this file on every call. */
+  mcp: McpPolicy
+  /** The file each notes record was last built from, as `mtime:size` by path
+   *  — so the library's quiet pass over the recents reads a document again
+   *  only once it has changed (src/renderer/src/notes-backfill.ts) */
+  notesScanned: Record<string, string>
 }
 
 const DEFAULT_AI: StoredAiConfig = {
@@ -75,9 +89,21 @@ const DEFAULTS: AppState = {
   recents: [],
   positions: {},
   bookmarks: {},
+  fingerprints: {},
   settings: { ...DEFAULT_SETTINGS },
   ai: DEFAULT_AI,
-  modelCatalog: {}
+  modelCatalog: {},
+  mcp: sanitizeMcpPolicy(null),
+  notesScanned: {}
+}
+
+const sanitizeScanned = (v: unknown): Record<string, string> => {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, s] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof s === 'string' && /^\d+(\.\d+)?:\d+$/.test(s)) out[k] = s
+  }
+  return out
 }
 
 export function mergeAiConfig(
@@ -113,9 +139,12 @@ export function getState(): AppState {
       ...DEFAULTS,
       ...parsed,
       recents: normalizeRecents(parsed.recents),
+      fingerprints: sanitizeFingerprints(parsed.fingerprints),
       session: sanitizeSession(parsed.session),
       settings: mergeSettings(DEFAULTS.settings, parsed.settings ?? {}),
-      ai: mergeAiConfig(DEFAULT_AI, parsed.ai ?? {})
+      ai: mergeAiConfig(DEFAULT_AI, parsed.ai ?? {}),
+      mcp: sanitizeMcpPolicy(parsed.mcp),
+      notesScanned: sanitizeScanned(parsed.notesScanned)
     }
   } catch (err) {
     // A file that exists but won't parse holds data (encrypted API keys!)

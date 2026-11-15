@@ -21,7 +21,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // untouched default costs nothing and renders bit-identically to before.
   themeTune: { sepia: 1, night: 1, custom: 1 },
   customTone: 'sepia',
+  customTints: [],
   nightTone: 'warm',
+  nightTints: [],
   nightKeepImages: false,
   selectionMenuTrigger: 'auto',
   selectionMenuCompact: false,
@@ -44,7 +46,8 @@ export const DEFAULT_SETTINGS: Settings = {
   restoreSession: true,
   pagedView: false,
   linkPreview: true,
-  linkPreviewDelay: 'medium'
+  linkPreviewDelay: 'medium',
+  ocrAuto: true
 }
 
 /** How many files «Nylig lest» remembers, on every platform (docs/SPEC.md §8).

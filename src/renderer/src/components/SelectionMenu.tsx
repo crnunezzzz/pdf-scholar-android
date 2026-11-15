@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  addCustomColor,
-  colorLabel,
-  hexToRgb,
-  HIGHLIGHT_COLORS,
-  loadCustomColors,
-  UNDERLINE_COLORS
-} from '../annotations'
+import { addCustomColor, colorLabel, hexToRgb, HIGHLIGHT_COLORS, UNDERLINE_COLORS } from '../annotations'
 import type { HighlightColor } from '../annotations'
+import { normalizeHex } from '../../../shared/custom-colors'
+import { renderSwatches, useCustomColors, withCustomColors } from './ColorSwatches'
 import { t, useLang } from '../i18n'
 import type { MsgKey } from '../i18n'
 import { useDraggable } from '../useDraggable'
@@ -34,40 +29,130 @@ import {
 } from './icons'
 import { inTextField } from './TextContextMenu'
 import { looksLikeReference } from '../../../shared/abstract'
+import { copyableLink } from '../../../shared/link-target'
 
-const HEX_RE = /^#?[0-9a-fA-F]{6}$/
+const WHEEL_START = '#ffd54a'
+
+/** The page selection as it stands, to be put back before the pick lands.
+ *  The pop takes focus — the hex field as it opens, the wheel when clicked —
+ *  and a focused field owns the document's one selection, so by the time a
+ *  colour was chosen the words the reader had marked were no longer selected:
+ *  applyMarkup read an empty selection and marked nothing, while the colour
+ *  was remembered all the same (issue #50, «I can't use the palette»). */
+function saveSelection(): Range | null {
+  const sel = window.getSelection()
+  return sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null
+}
+
+function restoreSelection(range: Range | null): void {
+  const sel = window.getSelection()
+  if (!range || !sel) return
+  // Still standing (a pick by keyboard that never moved focus): leave it
+  if (sel.rangeCount > 0 && !sel.isCollapsed) return
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
 
 /** Small popover behind the "+" swatch: a colour wheel and a hex field so
- *  users can pick visually or paste an exact #rrggbb. */
-function CustomColorPicker({ onPick }: { onPick(hex: string): void }): React.JSX.Element {
+ *  users can pick visually or paste an exact #rrggbb. Exported for the
+ *  toolbar's marker and markup menus (Emil, 2026-10-24: they showed the
+ *  remembered picks but had no way to make one — parity with the selection
+ *  menu, where «+» had lived alone). */
+export function CustomColorPicker({ onPick }: { onPick(hex: string): void }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [hex, setHex] = useState('#')
   const ref = useRef<HTMLDivElement>(null)
+  const wheelRef = useRef<HTMLInputElement>(null)
+  const selectionRef = useRef<Range | null>(null)
+  /** Where the pop goes, measured from the «+» as it opens. The menus it
+   *  lives in scroll (`overflow-y: auto` on .selection-menu and .tool-menu,
+   *  for the compact form and small windows), and a scroll box clips an
+   *  absolutely placed child — the pop over the FIRST row stuck out above
+   *  the menu and only its lower edge showed (Emil, 2026-10-24: «funker
+   *  ikke»). Fixed placement escapes the box; the menus are themselves
+   *  fixed and do not move while open, so one measurement is enough. */
+  const [anchor, setAnchor] = useState<{ top: number; bottom: number; right: number } | null>(null)
 
   const closePicker = useCallback(() => setOpen(false), [])
   useDismissable(ref, open, closePicker)
 
+  const toggle = (): void => {
+    if (!open) {
+      selectionRef.current = saveSelection()
+      const r = ref.current?.getBoundingClientRect()
+      setAnchor(r ? { top: r.top, bottom: r.bottom, right: r.right } : null)
+    }
+    setOpen(!open)
+  }
+
+  // Above the «+» as designed (the rows below stay uncovered), below it when
+  // the top of the window is too near; right-aligned to the button, but never
+  // past the window's left edge
+  const POP_H = 52
+  const POP_W = 170
+  const popStyle: React.CSSProperties = anchor
+    ? {
+        right: Math.max(8, Math.min(window.innerWidth - anchor.right, window.innerWidth - 8 - POP_W)),
+        ...(anchor.top >= POP_H + 8
+          ? { bottom: window.innerHeight - anchor.top + 6 }
+          : { top: anchor.bottom + 6 })
+      }
+    : {}
+
   const commit = (value: string): void => {
-    if (!HEX_RE.test(value)) return
-    onPick(value.startsWith('#') ? value.toLowerCase() : `#${value.toLowerCase()}`)
+    const picked = normalizeHex(value)
+    if (!picked) return
+    restoreSelection(selectionRef.current)
+    onPick(picked)
     setOpen(false)
   }
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+
+  // The wheel reports EVERY movement as an `input` event — the OS dialog on
+  // macOS, Electron's own popup picker on every platform — and React's
+  // onChange is that event. Picking on it meant the first movement marked
+  // the words in a half-chosen colour, closed the menu under the dialog and
+  // remembered that colour; a few tries filled all three slots with shades of
+  // the yellow the wheel starts on (issue #50). The pick is the dialog
+  // CLOSING: the native `change` event, which React folds into onChange, so
+  // it is listened for by hand — and only a value the wheel actually moved
+  // to counts, so a dialog cancelled untouched picks nothing.
+  useEffect(() => {
+    const el = wheelRef.current
+    if (!open || !el) return
+    const opened = el.value
+    const onClose = (): void => {
+      if (el.value !== opened) commitRef.current(el.value)
+    }
+    el.addEventListener('change', onClose)
+    return () => el.removeEventListener('change', onClose)
+  }, [open])
 
   return (
     <div className="color-plus-wrap" ref={ref}>
-      <button className="color-plus" title={t('menu.customColor')} onClick={() => setOpen((o) => !o)}>
+      <button className="color-plus" title={t('menu.customColor')} onClick={toggle}>
         +
       </button>
+      {/* Kept inside the menu's DOM on purpose: the menus close on a pointerdown
+          outside THEIR element, so a pop portalled to the body would close
+          its menu — and the picker with it — on its own first click. (The
+          menus' open animation translates them for 120 ms, which in a hidden
+          dev:web tab freezes and puts this fixed pop off-screen; a real
+          window finishes the animation before anyone can click «+».) */}
       {open && (
-        <div className="color-picker-pop" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="color-picker-pop" style={popStyle} onMouseDown={(e) => e.stopPropagation()}>
+          {/* The wheel is the system's own colour dialog behind a swatch;
+              drawn as a rainbow ring so it reads as «open the picker», not
+              as one more colour (Emil, 2026-10-24: «bare hex dukker opp») */}
           <input
+            ref={wheelRef}
             type="color"
             className="color-picker-wheel"
-            value={HEX_RE.test(hex) ? hex : '#ffd54a'}
-            onChange={(e) => {
-              setHex(e.target.value)
-              onPick(e.target.value.toLowerCase())
-            }}
+            title={t('menu.customColorWheel')}
+            aria-label={t('menu.customColorWheel')}
+            value={normalizeHex(hex) ?? WHEEL_START}
+            onChange={(e) => setHex(e.target.value)}
           />
           <input
             type="text"
@@ -85,7 +170,7 @@ function CustomColorPicker({ onPick }: { onPick(hex: string): void }): React.JSX
           />
           <button
             className="color-picker-apply"
-            disabled={!HEX_RE.test(hex)}
+            disabled={!normalizeHex(hex)}
             onClick={() => commit(hex)}
           >
             ✓
@@ -108,16 +193,14 @@ export function MarkupColorRow({
   tipKey: MsgKey
   onPick(color: HighlightColor): void
 }): React.JSX.Element {
-  const [customs, setCustoms] = useState<HighlightColor[]>(loadCustomColors)
-  const colors = [...palette, ...customs.filter((c) => !palette.some((p) => p.hex === c.hex))]
+  const colors = withCustomColors(palette, useCustomColors())
   const pickCustom = (hex: string): void => {
     addCustomColor(hex)
-    setCustoms(loadCustomColors())
     onPick({ key: 'custom', hex, rgb: hexToRgb(hex) })
   }
   return (
     <div className="color-row">
-      {colors.map((c) =>
+      {renderSwatches(colors, (c) =>
         swatch === 'dot' ? (
           <button
             key={c.hex}
@@ -155,6 +238,9 @@ export interface MenuState {
    *  because they ask about the tab's document and would answer from the
    *  wrong file. */
   foreign?: boolean
+  /** Point mode over a link: the annotation's own target (the page only shows
+   *  its text), so the menu can offer to copy it */
+  linkUrl?: string | undefined
 }
 
 /** Word Counter Plus-style stats for the current selection. Words split on
@@ -216,6 +302,8 @@ export type MenuAction =
   | { kind: 'comment' }
   | { kind: 'bookmark' }
   | { kind: 'copy' }
+  /** The address of the link under the pointer (point menu) */
+  | { kind: 'copyLink' }
   | { kind: 'search' }
   | { kind: 'dictionary' }
   | { kind: 'translate' }
@@ -280,6 +368,7 @@ export function SelectionMenu({ menu, onAction, aiEnabled, compact = false }: Me
    *  reference-list entry (shared/abstract.ts looksLikeReference) — prose
    *  never grows a network action it has no use for */
   const isReference = isSelection && looksLikeReference(selText)
+  const link = isSelection ? null : copyableLink(menu.linkUrl)
 
   const showAi = aiEnabled && !menu.foreign
   /* All assistant actions are siblings of one gesture ("ask the assistant
@@ -536,6 +625,15 @@ export function SelectionMenu({ menu, onAction, aiEnabled, compact = false }: Me
           <button className="menu-item" onClick={() => onAction({ kind: 'note' })}>
             <span className="menu-icon"><IconNote size={15} /></span> {t('menu.newNoteHere')}
           </button>
+          {/* First when the pointer is on a link: it is what a right-click
+              there is after. Reads the annotation's target, not the printed
+              text, so it also works on a «click here» or a wrapped address. */}
+          {link && (
+            <button className="menu-item" onClick={() => onAction({ kind: 'copyLink' })}>
+              <span className="menu-icon"><IconCopy size={15} /></span>{' '}
+              {t(link.kind === 'email' ? 'menu.copyEmail' : 'menu.copyLink')}
+            </button>
+          )}
           {/* Works in the split column's other document too — it renders from
               the page under the pointer, not from the tab's file. */}
           <button

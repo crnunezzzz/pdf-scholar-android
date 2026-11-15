@@ -8,15 +8,16 @@
 // contract — Anthropic and Google closed the same door in 2026 — so this
 // provider sits BESIDE the API-key one, never in place of it.
 //
-// Desktop only. The client's redirect is registered to http://localhost:1455,
-// and only a process that can listen on a local port can receive it — the
-// extension cannot (docs/PLATFORMS.md lists the divergence).
+// The sign-in is desktop only. The client's redirect is registered to
+// http://localhost:1455, and only a process that can listen on a local port
+// can receive it — the extension cannot; it borrows this sign-in through the
+// native host instead (src/main/native-host.ts, docs/PLATFORMS.md §25).
 //
 // Flow (mirrors opencode's packages/opencode/src/plugin/openai/codex.ts, read
 // 2026-09-27): PKCE authorize in the system browser → callback on :1455 →
 // code exchange → { access, refresh, id_token }. The access token lives about
-// an hour; `refresh` renews it. Tokens never reach the renderer — ai.ts seals
-// the bundle with safeStorage exactly like an API key.
+// an hour; `refresh` renews it. Tokens never reach the renderer —
+// chatgpt-store.ts seals the bundle with safeStorage exactly like an API key.
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
@@ -24,23 +25,15 @@ import { shell } from 'electron'
 import type { FileError } from '../shared/types'
 import { CHATGPT_ORIGINATOR } from '../shared/ai-chat'
 import { CHATGPT_LOGIN_ERRORS } from '../shared/engine-errors'
+import { dialogLanguage } from './dialog-language'
+import type { ChatgptTokens, RefreshResult } from './chatgpt-renew'
+export type { ChatgptTokens }
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const ISSUER = 'https://auth.openai.com'
 const PORT = 1455
 const REDIRECT_URI = `http://localhost:${PORT}/auth/callback`
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
-
-/** What ai.ts seals and stores under keys.chatgpt */
-export interface ChatgptTokens {
-  access: string
-  refresh: string
-  /** Epoch ms when `access` stops working */
-  expires: number
-  accountId: string
-  /** For the settings row («Logget inn som …»); '' when the token has none */
-  email: string
-}
 
 interface TokenResponse {
   id_token?: string
@@ -99,23 +92,23 @@ function toBundle(tokens: TokenResponse, previous?: ChatgptTokens): ChatgptToken
   }
 }
 
-async function tokenRequest(params: Record<string, string>): Promise<Response> {
+async function tokenRequest(params: Record<string, string>, signal?: AbortSignal): Promise<Response> {
   return fetch(`${ISSUER}/oauth/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: CLIENT_ID, ...params }).toString()
+    body: new URLSearchParams({ client_id: CLIENT_ID, ...params }).toString(),
+    signal: signal ?? null
   })
 }
 
 /** Renew the access token. `expired` = the refresh token itself was refused
  *  (revoked, signed out elsewhere) and only a new sign-in helps; any other
  *  failure (offline) leaves the stored bundle alone. */
-export async function refreshChatgpt(
-  current: ChatgptTokens
-): Promise<{ ok: true; tokens: ChatgptTokens } | { ok: false; expired: boolean; detail: string }> {
+export async function refreshChatgpt(current: ChatgptTokens): Promise<RefreshResult> {
   let res: Response
   try {
-    res = await tokenRequest({ grant_type: 'refresh_token', refresh_token: current.refresh })
+    // Bounded: it runs holding the lock the native host shares (chatgpt-renew.ts)
+    res = await tokenRequest({ grant_type: 'refresh_token', refresh_token: current.refresh }, AbortSignal.timeout(20_000))
   } catch (err) {
     return { ok: false, expired: false, detail: err instanceof Error ? err.message : String(err) }
   }
@@ -126,10 +119,43 @@ export async function refreshChatgpt(
   return { ok: true, tokens: toBundle((await res.json()) as TokenResponse, current) }
 }
 
-const page = (title: string, body: string): string =>
-  `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
-  `<body style="font:16px system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;color:#222">` +
-  `<h1 style="font-size:1.25rem">${title}</h1><p>${body}</p></body>`
+type CallbackPage = 'cancelled' | 'invalid' | 'signedIn'
+
+/** The pages the browser lands on after the sign-in, in the app's language
+ *  (the same setting main's native dialogs follow) */
+function callbackStrings(lang: 'nb' | 'en' | 'zh'): Record<CallbackPage, { title: string; body: string }> {
+  if (lang === 'nb') {
+    return {
+      cancelled: { title: 'Innloggingen ble avbrutt', body: 'Du kan lukke denne fanen og prøve igjen fra PDF Scholar.' },
+      invalid: { title: 'Ugyldig innlogging', body: 'Svaret fra OpenAI hørte ikke til denne innloggingen.' },
+      signedIn: { title: 'Logget inn', body: 'Du kan lukke denne fanen og gå tilbake til PDF Scholar.' }
+    }
+  }
+  if (lang === 'zh') {
+    return {
+      cancelled: { title: '登录已取消', body: '您可以关闭此标签页，然后在 PDF Scholar 中重试。' },
+      invalid: { title: '登录无效', body: '来自 OpenAI 的响应不属于此次登录。' },
+      signedIn: { title: '已登录', body: '您可以关闭此标签页并返回 PDF Scholar。' }
+    }
+  }
+  return {
+    cancelled: { title: 'Sign-in cancelled', body: 'You can close this tab and try again from PDF Scholar.' },
+    invalid: { title: 'Invalid sign-in', body: 'The response from OpenAI did not belong to this sign-in.' },
+    signedIn: { title: 'Signed in', body: 'You can close this tab and return to PDF Scholar.' }
+  }
+}
+
+const HTML_LANG = { nb: 'nb', en: 'en', zh: 'zh-Hans' } as const
+
+const page = (kind: CallbackPage): string => {
+  const lang = dialogLanguage()
+  const { title, body } = callbackStrings(lang)[kind]
+  return (
+    `<!doctype html><html lang="${HTML_LANG[lang]}"><meta charset="utf-8"><title>${title}</title>` +
+    `<body style="font:16px system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;color:#222">` +
+    `<h1 style="font-size:1.25rem">${title}</h1><p>${body}</p></body></html>`
+  )
+}
 
 /** The pending sign-in, so a second click restarts instead of colliding */
 let pending: { cancel(): void } | null = null
@@ -162,12 +188,12 @@ export async function loginChatgpt(): Promise<{ ok: true; tokens: ChatgptTokens 
         res.writeHead(404).end()
         return
       }
-      const html = (status: number, title: string, body: string): void => {
-        res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }).end(page(title, body))
+      const html = (status: number, kind: CallbackPage): void => {
+        res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }).end(page(kind))
       }
       const error = url.searchParams.get('error')
       if (error) {
-        html(200, 'Innloggingen ble avbrutt', 'Du kan lukke denne fanen og prøve igjen fra PDF Scholar.')
+        html(200, 'cancelled')
         finish(error === 'access_denied' ? CHATGPT_LOGIN_ERRORS.cancelled : CHATGPT_LOGIN_ERRORS.failed(url.searchParams.get('error_description') ?? error))
         return
       }
@@ -175,10 +201,10 @@ export async function loginChatgpt(): Promise<{ ok: true; tokens: ChatgptTokens 
       // A callback that does not carry OUR state is not our sign-in — anyone
       // on this machine can hit a localhost port
       if (!code || url.searchParams.get('state') !== state) {
-        html(400, 'Ugyldig innlogging', 'Svaret fra OpenAI hørte ikke til denne innloggingen.')
+        html(400, 'invalid')
         return
       }
-      html(200, 'Logget inn', 'Du kan lukke denne fanen og gå tilbake til PDF Scholar.')
+      html(200, 'signedIn')
       tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, code_verifier: verifier })
         .then(async (r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`)
